@@ -26,6 +26,35 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.ImeAction
+import app.lumen.reader.core.LocalPickers
+import app.lumen.reader.core.Saver
+import app.lumen.reader.edit.PillButton
+import app.lumen.reader.edit.UnsavedChangesPanel
+import app.lumen.reader.edit.toast
+import app.lumen.reader.ui.glass.GlassIconButton
+import app.lumen.reader.ui.glass.GlassPanel
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -106,13 +135,105 @@ private fun TableReader(ref: DocRef, book: Workbook, onBack: () -> Unit) {
     var chrome by rememberSaveable { mutableStateOf(true) }
     var firstRowHeader by rememberSaveable { mutableStateOf(true) }
     val sheet = book.sheets[sheetIndex]
+    val context = LocalContext.current
+    val pickers = LocalPickers.current
+    val scope = rememberCoroutineScope()
+    var editing by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var version by remember { mutableIntStateOf(0) }
+    var dirty by remember { mutableStateOf(false) }
+    var confirmExit by remember { mutableStateOf(false) }
+    val cellText = rememberTextFieldState()
+    // Editing a truncated workbook would silently drop the rows we never loaded.
+    val canEdit = !book.truncated && (ref.kind == FileKind.Csv || ref.kind == FileKind.Xlsx)
+
+    fun commitCell() {
+        val sel = selected ?: return
+        val old = sheet.rows.getOrNull(sel.first)?.getOrNull(sel.second) ?: ""
+        val new = cellText.text.toString()
+        if (new != old) {
+            sheet.set(sel.first, sel.second, new)
+            dirty = true
+            version++
+        }
+    }
+
+    fun save(thenClose: Boolean) {
+        commitCell()
+        scope.launch {
+            val result = if (ref.kind == FileKind.Xlsx) {
+                val source = Docs.localFile(context, ref)
+                val bytes = withContext(Dispatchers.IO) {
+                    java.io.ByteArrayOutputStream().also { XlsxWriter.write(source, book, it) }.toByteArray()
+                }
+                Saver.save(context, pickers, ref) { it.write(bytes) }.also {
+                    if (it is Saver.Result.Saved) source.delete()
+                }
+            } else {
+                Saver.save(context, pickers, ref) { CsvWriter.write(book.sheets[0], book.delimiter, it) }
+            }
+            toast(context, result)
+            if (result is Saver.Result.Saved || result is Saver.Result.SavedCopy) {
+                dirty = false
+                book.sheets.forEach { it.edits.clear() }
+                if (thenClose) onBack()
+            }
+        }
+    }
+
+    fun exit() {
+        if (dirty) confirmExit = true else onBack()
+    }
+    androidx.activity.compose.BackHandler(editing || dirty) {
+        when {
+            selected != null -> { commitCell(); selected = null }
+            editing && !dirty -> editing = false
+            else -> exit()
+        }
+    }
 
     ViewerScaffold(
         ref = ref,
         title = ref.name,
-        subtitle = "${"%,d".format(sheet.rows.size)} rows × ${sheet.columns} columns" + if (book.truncated) " · truncated" else "",
-        chromeVisible = chrome,
-        onBack = onBack,
+        subtitle = (if (dirty) "Edited · " else "") + "${"%,d".format(sheet.rows.size)} rows × ${sheet.columns} columns" + if (book.truncated) " · truncated" else "",
+        chromeVisible = chrome || editing,
+        onBack = ::exit,
+        actions = { b ->
+            if (canEdit) {
+                if (editing) {
+                    GlassIconButton(Icons.Rounded.Add, "Add row", b, {
+                        commitCell()
+                        sheet.addRow()
+                        selected = sheet.rows.lastIndex to 0
+                        cellText.setTextAndPlaceCursorAtEnd("")
+                        dirty = true
+                        version++
+                    })
+                    GlassIconButton(Icons.Rounded.Check, "Save", b, { save(false) }, tint = colors.accent, iconTint = Color.White)
+                } else {
+                    GlassIconButton(Icons.Rounded.Edit, "Edit", b, { editing = true })
+                }
+            }
+        },
+        overlay = { b ->
+            val sel = selected
+            AnimatedVisibility(
+                editing && sel != null,
+                modifier = Modifier.align(Alignment.BottomCenter).imePadding().padding(bottom = 90.dp, start = 12.dp, end = 12.dp),
+                enter = fadeIn() + slideInVertically { it / 2 },
+                exit = fadeOut() + slideOutVertically { it / 2 }
+            ) {
+                if (sel != null) CellEditor(b, XlsxWriter.columnName(sel.second) + (sel.first + 1), cellText) {
+                    commitCell(); selected = null
+                }
+            }
+            UnsavedChangesPanel(
+                b, confirmExit,
+                onSave = { confirmExit = false; save(true) },
+                onDiscard = { confirmExit = false; onBack() },
+                onCancel = { confirmExit = false }
+            )
+        },
         bottomBar = { b ->
             BottomPill(b) {
                 if (book.sheets.size > 1) {
@@ -143,7 +264,48 @@ private fun TableReader(ref: DocRef, book: Workbook, onBack: () -> Unit) {
             }
         }
     ) { padding ->
-        Grid(sheet, padding, header = firstRowHeader && sheet.rows.size > 1, onTap = { chrome = !chrome })
+        Grid(
+            sheet, padding, header = firstRowHeader && sheet.rows.size > 1, onTap = { chrome = !chrome },
+            version = version,
+            selected = if (editing) selected else null,
+            onCellTap = if (editing) { r, c ->
+                commitCell()
+                selected = r to c
+                cellText.setTextAndPlaceCursorAtEnd(sheet.rows.getOrNull(r)?.getOrNull(c) ?: "")
+            } else null
+        )
+    }
+}
+
+@Composable
+private fun CellEditor(backdrop: com.kyant.backdrop.Backdrop, label: String, state: TextFieldState, onDone: () -> Unit) {
+    val colors = Lumen.colors
+    val type = Lumen.type
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(label) { focus.requestFocus() }
+    GlassPanel(backdrop, Modifier.widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 24.dp) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            BasicText(
+                label,
+                style = type.label.copy(color = colors.accent),
+                modifier = Modifier.padding(horizontal = 10.dp)
+            )
+            BasicTextField(
+                state = state,
+                lineLimits = TextFieldLineLimits.SingleLine,
+                textStyle = type.body.copy(color = colors.content),
+                cursorBrush = SolidColor(colors.accent),
+                onKeyboardAction = { onDone() },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colors.content.copy(alpha = 0.07f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .focusRequester(focus)
+            )
+            PillButton("Done", Modifier.padding(start = 8.dp), onClick = onDone)
+        }
     }
 }
 
@@ -153,7 +315,15 @@ private fun TableReader(ref: DocRef, book: Workbook, onBack: () -> Unit) {
  * never composition, so even very wide sheets stay smooth.
  */
 @Composable
-private fun Grid(sheet: Sheet, padding: PaddingValues, header: Boolean, onTap: () -> Unit) {
+private fun Grid(
+    sheet: Sheet,
+    padding: PaddingValues,
+    header: Boolean,
+    onTap: () -> Unit,
+    version: Int = 0,
+    selected: Pair<Int, Int>? = null,
+    onCellTap: ((Int, Int) -> Unit)? = null
+) {
     val colors = Lumen.colors
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer(cacheSize = 0)
@@ -167,7 +337,7 @@ private fun Grid(sheet: Sheet, padding: PaddingValues, header: Boolean, onTap: (
 
     val rowHeight = with(density) { 38.dp.toPx() }
     val padX = with(density) { 12.dp.toPx() }
-    val widths = remember(sheet) {
+    val widths = remember(sheet, sheet.columns) {
         val probe = measurer.measure("0000000000", cellStyle).size.width / 10f
         FloatArray(sheet.columns) { c ->
             var longest = 0
@@ -206,12 +376,27 @@ private fun Grid(sheet: Sheet, padding: PaddingValues, header: Boolean, onTap: (
                         }
                     }
                 )
-                .pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
+                .pointerInput(onCellTap, header, maxScroll) {
+                    detectTapGestures(onTap = { pos ->
+                        val cellTap = onCellTap ?: return@detectTapGestures onTap()
+                        if (pos.x < gutter) return@detectTapGestures
+                        val headerH = if (header) rowHeight else 0f
+                        val row = if (header && pos.y >= topPad && pos.y < topPad + headerH) 0 else {
+                            val y = pos.y - topPad - headerH
+                            listState.layoutInfo.visibleItemsInfo
+                                .firstOrNull { y >= it.offset && y < it.offset + it.size }?.index?.plus(firstData)
+                        } ?: return@detectTapGestures
+                        val x = scrollX + pos.x - gutter
+                        val col = (0 until widths.size).firstOrNull { x >= offsets[it] && x < offsets[it + 1] } ?: return@detectTapGestures
+                        cellTap(row, col)
+                    })
+                }
         ) {
             Box(Modifier.height(with(density) { topPad.toDp() }))
             if (header) {
                 Canvas(Modifier.fillMaxWidth().height(with(density) { rowHeight.toDp() })) {
-                    drawRow(sheet.rows[0], -1, true, scrollX, gutter, widths, offsets, measurer, headStyle, gutterStyle, padX, colors.surfaceStrong, colors.hairline, null)
+                    @Suppress("UNUSED_VARIABLE") val v = version
+                    drawRow(sheet.rows[0], -1, true, scrollX, gutter, widths, offsets, measurer, headStyle, gutterStyle, padX, colors.surfaceStrong, colors.hairline, null, selected?.takeIf { it.first == 0 }?.second ?: -1, colors.accent)
                 }
             }
             LazyColumn(
@@ -220,12 +405,14 @@ private fun Grid(sheet: Sheet, padding: PaddingValues, header: Boolean, onTap: (
                 modifier = Modifier.fillMaxWidth().weight(1f)
             ) {
                 items(dataRows) { i ->
+                    @Suppress("UNUSED_VARIABLE") val v = version
                     val row = sheet.rows[i + firstData]
                     val cache = remember(row) { arrayOfNulls<TextLayoutResult>(row.size) }
                     Canvas(Modifier.fillMaxWidth().height(with(density) { rowHeight.toDp() })) {
                         drawRow(
                             row, i + firstData, false, scrollX, gutter, widths, offsets, measurer, cellStyle, gutterStyle, padX,
-                            if (i % 2 == 1) colors.surface.copy(alpha = 0.45f) else Color.Transparent, colors.hairline, cache
+                            if (i % 2 == 1) colors.surface.copy(alpha = 0.45f) else Color.Transparent, colors.hairline, cache,
+                            selected?.takeIf { it.first == i + firstData }?.second ?: -1, colors.accent
                         )
                     }
                 }
@@ -248,7 +435,9 @@ private fun DrawScope.drawRow(
     padX: Float,
     background: Color,
     line: Color,
-    cache: Array<TextLayoutResult?>?
+    cache: Array<TextLayoutResult?>?,
+    selectedCol: Int = -1,
+    accent: Color = Color.Unspecified
 ) {
     if (background != Color.Transparent) drawRect(background)
     val h = size.height
@@ -277,6 +466,16 @@ private fun DrawScope.drawRow(
             }
             drawLine(line, Offset(x + widths[c], 0f), Offset(x + widths[c], h))
             c++
+        }
+    }
+    if (selectedCol in widths.indices) {
+        val x = gutter + offsets[selectedCol] - scrollX
+        clipRect(left = gutter) {
+            drawRect(accent.copy(alpha = 0.16f), Offset(x, 0f), androidx.compose.ui.geometry.Size(widths[selectedCol], h))
+            drawRect(
+                accent, Offset(x + 1f, 1f), androidx.compose.ui.geometry.Size(widths[selectedCol] - 2f, h - 2f),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(2.5f)
+            )
         }
     }
     drawLine(line, Offset(0f, h - 0.5f), Offset(size.width, h - 0.5f))

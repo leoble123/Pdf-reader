@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Search
@@ -80,6 +81,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private class TextDoc(
+    val raw: String,
     val lines: List<String>,
     val comments: BooleanArray,
     val lang: Lang,
@@ -89,19 +91,21 @@ private class TextDoc(
 )
 
 @Composable
-fun TextScreen(ref: DocRef, onBack: () -> Unit) {
+fun TextScreen(ref: DocRef, onBack: () -> Unit, startEditing: Boolean = false, onSaved: () -> Unit = {}) {
     val context = LocalContext.current
     var doc by remember { mutableStateOf<TextDoc?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var editing by rememberSaveable { mutableStateOf(startEditing) }
+    var version by remember { mutableIntStateOf(0) }
     val isCode = ref.kind == FileKind.Code
-    LaunchedEffect(ref) {
+    LaunchedEffect(ref, version) {
         runCatching {
             val loaded = TextLoader.load(context, ref)
             withContext(Dispatchers.Default) {
                 val lines = TextLoader.splitLines(loaded.text)
                 val lang = if (isCode) Highlighter.langFor(ref.extension.ifEmpty { ref.name.lowercase() }) else Lang.Plain
                 TextDoc(
-                    lines, Highlighter.blockCommentStarts(lines, lang), lang,
+                    loaded.text, lines, Highlighter.blockCommentStarts(lines, lang), lang,
                     lines.maxOfOrNull { it.length } ?: 0, loaded.truncated, loaded.charset
                 )
             }
@@ -111,12 +115,27 @@ fun TextScreen(ref: DocRef, onBack: () -> Unit) {
     when {
         error != null -> ViewerScaffold(ref, ref.name, null, true, onBack) { CenteredMessage("Couldn't read this file", error) }
         d == null -> ViewerScaffold(ref, ref.name, null, true, onBack) { LoadingIndicator() }
-        else -> TextReader(ref, d, isCode, onBack)
+        editing && !d.truncated -> TextEditor(
+            ref = ref,
+            initial = d.raw,
+            charset = d.charset,
+            lang = d.lang,
+            mono = isCode || ref.kind == FileKind.Markdown,
+            onClose = { saved ->
+                editing = false
+                if (saved) {
+                    version++
+                    onSaved()
+                }
+                if (startEditing) onBack()
+            }
+        )
+        else -> TextReader(ref, d, isCode, onBack, onEdit = if (d.truncated) null else ({ editing = true }))
     }
 }
 
 @Composable
-private fun TextReader(ref: DocRef, doc: TextDoc, isCode: Boolean, onBack: () -> Unit) {
+private fun TextReader(ref: DocRef, doc: TextDoc, isCode: Boolean, onBack: () -> Unit, onEdit: (() -> Unit)?) {
     val colors = Lumen.colors
     val type = Lumen.type
     val scope = rememberCoroutineScope()
@@ -177,6 +196,7 @@ private fun TextReader(ref: DocRef, doc: TextDoc, isCode: Boolean, onBack: () ->
                 GlassIconButton(Icons.Rounded.KeyboardArrowUp, "Previous", b, { step(-1) })
                 GlassIconButton(Icons.Rounded.KeyboardArrowDown, "Next", b, { step(1) })
             } else {
+                if (onEdit != null) GlassIconButton(Icons.Rounded.Edit, "Edit", b, onEdit)
                 GlassIconButton(Icons.Rounded.Search, "Find", b, { searching = true })
                 GlassIconButton(
                     Icons.AutoMirrored.Rounded.WrapText, "Wrap lines", b, { wrap = !wrap },

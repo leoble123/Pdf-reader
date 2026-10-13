@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
@@ -100,7 +101,10 @@ fun RichDocView(
     theme: ReadingTheme,
     fontScale: Float,
     onFontScale: (Float) -> Unit,
-    onTap: () -> Unit
+    onTap: () -> Unit,
+    blocks: List<Block> = doc.blocks,
+    selectedBlock: Int = -1,
+    onBlockTap: ((Int) -> Unit)? = null
 ) {
     val scale by rememberUpdatedState(fontScale)
     val body = TextStyle(
@@ -136,21 +140,33 @@ fun RichDocView(
         val columnWidth = minOf(maxWidth, 720.dp)
         val sidePad = if (maxWidth > 760.dp) 32.dp else 22.dp
         val imageWidthPx = with(LocalDensity.current) { (columnWidth - sidePad * 2).toPx().roundToInt() }
-        SelectionContainer {
+        val content: @Composable () -> Unit = {
             LazyColumn(
                 state = listState,
                 contentPadding = padding,
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxSize()
             ) {
-                itemsIndexed(doc.blocks, contentType = { _, b -> b::class }) { _, block ->
-                    Box(Modifier.width(columnWidth).padding(horizontal = sidePad)) {
+                itemsIndexed(blocks, contentType = { _, b -> b::class }) { index, block ->
+                    Box(
+                        Modifier
+                            .width(columnWidth)
+                            .then(
+                                if (onBlockTap == null) Modifier else Modifier
+                                    .padding(horizontal = 6.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (index == selectedBlock) theme.accent.copy(alpha = 0.14f) else Color.Transparent)
+                                    .clickable { onBlockTap(index) }
+                            )
+                            .padding(horizontal = if (onBlockTap == null) sidePad else sidePad - 6.dp)
+                    ) {
                         BlockView(block, body, theme, fontScale, imageWidthPx)
                     }
                 }
                 item { Spacer(Modifier.height(40.dp)) }
             }
         }
+        if (onBlockTap == null) SelectionContainer { content() } else content()
     }
 }
 

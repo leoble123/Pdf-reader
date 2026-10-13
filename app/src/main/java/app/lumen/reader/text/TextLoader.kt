@@ -40,7 +40,7 @@ object TextLoader {
     fun decode(bytes: ByteArray): Pair<String, String> {
         // BOMs first.
         if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte())
-            return String(bytes, 3, bytes.size - 3, Charsets.UTF_8) to "UTF-8"
+            return String(bytes, 3, bytes.size - 3, Charsets.UTF_8) to "UTF-8 BOM"
         if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte())
             return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE) to "UTF-16LE"
         if (bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte())
@@ -75,6 +75,18 @@ object TextLoader {
             if (len > back + 1) end = i
         }
         return end
+    }
+
+    /** Encodes edited text back the way the file was stored (charset, BOM, line endings). */
+    fun encode(text: String, charset: String, crlf: Boolean): ByteArray {
+        val body = if (crlf) text.replace("\r\n", "\n").replace("\n", "\r\n") else text
+        return when (charset) {
+            "UTF-8 BOM" -> byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + body.toByteArray(Charsets.UTF_8)
+            "UTF-16LE" -> byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + body.toByteArray(Charsets.UTF_16LE)
+            "UTF-16BE" -> byteArrayOf(0xFE.toByte(), 0xFF.toByte()) + body.toByteArray(Charsets.UTF_16BE)
+            "Windows-1252" -> body.toByteArray(Charset.forName("windows-1252"))
+            else -> body.toByteArray(Charsets.UTF_8)
+        }
     }
 
     fun splitLines(text: String): List<String> {

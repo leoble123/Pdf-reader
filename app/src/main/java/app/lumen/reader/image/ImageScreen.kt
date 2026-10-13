@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -84,7 +85,16 @@ fun ImageScreen(ref: DocRef, onBack: () -> Unit) {
         title = ref.name,
         subtitle = d?.let { "${it.sourceWidth} × ${it.sourceHeight}" + (ref.extension.takeIf { e -> e.isNotEmpty() }?.let { e -> " · ${e.uppercase()}" } ?: "") },
         chromeVisible = chrome,
-        onBack = onBack
+        onBack = onBack,
+        actions = { b ->
+            val navigate = app.lumen.reader.core.LocalNavigator.current
+            if (d != null && d.drawable == null) {
+                app.lumen.reader.ui.glass.GlassIconButton(
+                    androidx.compose.material.icons.Icons.Rounded.Tune, "Edit photo", b,
+                    { navigate(app.lumen.reader.core.Route.PhotoEdit(ref)) }
+                )
+            }
+        }
     ) { _ ->
         Box(Modifier.fillMaxSize().background(bg)) {
             when {

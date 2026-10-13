@@ -51,6 +51,7 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -115,8 +116,12 @@ fun PdfViewer(
     activeHit: Pair<Int, Int>?,
     onTap: () -> Unit,
     onLink: (PdfLink) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    ink: InkController? = null,
+    inkActive: Boolean = false,
+    onNoteRequest: (page: Int, x: Float, y: Float) -> Unit = { _, _, _ -> }
 ) {
+    val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val decay = rememberSplineBasedDecay<Float>()
     val scope = rememberCoroutineScope()
@@ -210,7 +215,9 @@ fun PdfViewer(
                     detail = details[index],
                     hit = hits[index],
                     activeRect = activeHit?.takeIf { it.first == index }?.second,
-                    onLinks = { links[index] = it }
+                    onLinks = { links[index] = it },
+                    ink = ink,
+                    measurer = measurer
                 )
             }
             item(key = "end") {
@@ -231,10 +238,14 @@ fun PdfViewer(
         Box(
             Modifier
                 .fillMaxSize()
-                .pointerInput(doc) {
+                .pointerInput(doc, inkActive) {
                     detectTapGestures(
                         onTap = { screen ->
                             val pos = Offset((screen.x - state.offsetX) / state.scale, screen.y / state.scale)
+                            if (inkActive && ink?.tool == InkTool.Text) {
+                                pageAt(state, doc, pos, hPadPx, pageWidthPx)?.let { (p, x, y) -> onNoteRequest(p, x, y) }
+                                return@detectTapGestures
+                            }
                             val link = hitLink(state, doc, links, pos, hPadPx, pageWidthPx)
                             if (link != null) onLink(link) else onTap()
                         },
@@ -243,9 +254,41 @@ fun PdfViewer(
                         }
                     )
                 }
-                .pointerInput(doc) {
+                .pointerInput(doc, inkActive) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
+                        // Markup: one finger draws, two fingers still pinch and pan.
+                        val drawing = inkActive && ink != null && ink.tool != InkTool.Text
+                        var inking = false
+                        if (drawing) {
+                            val pos = Offset((down.position.x - state.offsetX) / state.scale, down.position.y / state.scale)
+                            pageAt(state, doc, pos, hPadPx, pageWidthPx)?.let { (p, x, y) ->
+                                inking = true
+                                if (ink.tool == InkTool.Eraser) ink.erase(p, x, y) else ink.begin(p, x, y)
+                                down.consume()
+                            }
+                        }
+                        if (inking) {
+                            var stillInking = true
+                            while (stillInking) {
+                                val event = awaitPointerEvent()
+                                val pressed = event.changes.count { it.pressed }
+                                if (pressed == 0) {
+                                    ink!!.end(); return@awaitEachGesture
+                                }
+                                if (pressed > 1) {
+                                    ink!!.cancel(); stillInking = false
+                                } else {
+                                    val c = event.changes.first { it.pressed }
+                                    val pos = Offset((c.position.x - state.offsetX) / state.scale, c.position.y / state.scale)
+                                    pageAt(state, doc, pos, hPadPx, pageWidthPx)?.let { (p, x, y) ->
+                                        if (ink!!.tool == InkTool.Eraser) ink.erase(p, x, y)
+                                        else if (ink.live?.first == p) ink.extend(x, y)
+                                    }
+                                    c.consume()
+                                }
+                            }
+                        }
                         if (flingJob?.isActive == true) {
                             flingJob?.cancel()
                             down.consume()
@@ -308,6 +351,20 @@ private data class DetailTrigger(
     val interacting: Boolean
 )
 
+/** Screen-independent hit test: list coordinates → (page, normalized x, normalized y). */
+private fun pageAt(state: PdfViewerState, doc: PdfDoc, pos: Offset, hPad: Float, pageWidth: Int): Triple<Int, Float, Float>? {
+    val info = state.listState.layoutInfo
+    val item = info.visibleItemsInfo.firstOrNull {
+        val top = it.offset - info.viewportStartOffset
+        it.index < doc.pageCount && pos.y >= top && pos.y <= top + it.size
+    } ?: return null
+    val top = item.offset - info.viewportStartOffset
+    val nx = (pos.x - hPad) / pageWidth
+    val ny = (pos.y - top) / item.size
+    if (nx !in 0f..1f || ny !in 0f..1f) return null
+    return Triple(item.index, nx, ny)
+}
+
 private fun hitLink(
     state: PdfViewerState,
     doc: PdfDoc,
@@ -338,7 +395,9 @@ private fun PdfPage(
     detail: Detail?,
     hit: SearchHit?,
     activeRect: Int?,
-    onLinks: (List<PdfLink>) -> Unit
+    onLinks: (List<PdfLink>) -> Unit,
+    ink: InkController?,
+    measurer: androidx.compose.ui.text.TextMeasurer
 ) {
     var image by remember(index, widthPx) {
         mutableStateOf(
@@ -406,6 +465,10 @@ private fun PdfPage(
                     )
                 }
                 hit?.let { drawHits(it, activeRect) }
+                if (ink != null) {
+                    ink.pages[index]?.let { drawMarks(it, measurer) }
+                    ink.live?.takeIf { it.first == index }?.let { drawMarks(listOf(it.second), measurer) }
+                }
             }
     )
 }

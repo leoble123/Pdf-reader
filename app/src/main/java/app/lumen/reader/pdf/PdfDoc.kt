@@ -113,7 +113,7 @@ class PdfDoc private constructor(
         return if (h > 0) w.toFloat() / h else 1f / 1.4142f
     }
 
-    private fun pagePoints(index: Int): Pair<Int, Int> {
+    fun pagePointsOf(index: Int): Pair<Int, Int> {
         val packed = pageSizes.getOrNull(index)
         return if (packed != null) (packed ushr 32).toInt() to (packed and 0xFFFFFFFF).toInt()
         else 612 to 792

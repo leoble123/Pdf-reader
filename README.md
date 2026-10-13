@@ -1,8 +1,8 @@
 # Lumen
 
-A fast, offline file reader for Android with a liquid-glass UI.
+A fast, offline file reader and editor for Android with a liquid-glass UI.
 
-Lumen opens PDFs and most other common files. Everything is drawn on the device. The app has **no `INTERNET` permission**, so it can't send your files anywhere.
+Lumen opens PDFs and most other common files, lets you edit them, and includes a photo editor and a video editor. Everything is drawn on the device. The app has **no `INTERNET` permission**, so it can't send your files anywhere.
 
 The floating bars, buttons and panels are real refracting glass, built with [Kyant's Backdrop / Liquid Glass](https://github.com/Kyant0/AndroidLiquidGlass) library (`io.github.kyant0:backdrop`).
 
@@ -23,6 +23,25 @@ The floating bars, buttons and panels are real refracting glass, built with [Kya
 | Web / vector | `.html` `.svg` | Sandboxed WebView: no JavaScript, no network, no file access |
 | Anything else | | File details, a hex preview, and "open as text / archive / image" |
 
+## Editing
+
+Edits are saved back to the original file when the app that provided it allows writing. Otherwise Lumen asks where to save a copy.
+
+| What | How |
+|---|---|
+| Text, code, Markdown | Full editor with live syntax highlighting, undo/redo, find & replace, line/column readout. Keeps the file's encoding, BOM and line endings |
+| CSV / Excel | Tap a cell to edit it, add rows. `.xlsx` saves are surgical: only the edited `<c>` cells are rewritten, so styles, other sheets, charts and formulas elsewhere survive |
+| Word (`.docx`) | Tap a paragraph to rewrite, delete, or add one below. Only touched paragraphs change; headings and list styles carry over. Paragraphs holding images or objects are read-only |
+| PDF | Markup mode: pen, highlighter, eraser and text notes in 8 colours, with undo/redo. Two fingers still zoom and pan while drawing. Marks are kept per document and reappear when you reopen it. *Export* writes an annotated copy. Android has no API for adding annotations to an existing PDF, so pages in the copy are rendered at 2× and the marks are drawn on top as vectors |
+
+## Photo editor
+
+Crop (free, original, 1:1, 4:5, 9:16, 16:9, 3:2), rotate, flip, straighten. Exposure, contrast, highlights, shadows, saturation, warmth, tint, fade and vignette. Ten filters with adjustable strength. Brush drawing and text layers you can drag. Unlimited undo/redo, and hold the compare button to see the original. The live preview is one AGSL GPU shader on a 1600 px proxy (Android 13+). Export re-runs the same math on the CPU at up to 4096 px and saves to *Pictures/Lumen*. The original file is never touched.
+
+## Video editor
+
+A timeline in the style of mobile video apps: it scrolls under a fixed playhead, shows a filmstrip of each clip, and pinches to zoom. Mix videos and photos. Trim with handles, split at the playhead, duplicate, reorder, delete. Per-clip speed (0.25×–4×), volume or mute, and captions. Filters and colour adjustments for the whole edit, aspect ratio (9:16, 1:1, 4:5, 16:9), and a background music track that loops. Live preview uses Media3 `CompositionPlayer`. Export uses Media3 `Transformer` with the phone's hardware encoder (H.264, 480p–1440p) and saves to *Movies/Lumen*. Projects autosave and reopen where you left off.
+
 ## How it stays smooth
 
 * **PDF zoom is a GPU layer transform.** Pinching doesn't re-measure, recompose or re-render anything. After the gesture ends, only the visible part of each page is re-rendered at full resolution (`PdfDoc.renderRegion`). Deep zoom stays sharp without allocating very large bitmaps.
@@ -34,7 +53,7 @@ The floating bars, buttons and panels are real refracting glass, built with [Kya
 
 ```bash
 ./gradlew :app:assembleRelease      # → app/build/outputs/apk/release/app-release.apk
-./gradlew :app:testDebugUnitTest    # parser tests + JVM-rendered screenshots (app/build/screenshots)
+./gradlew :app:testDebugUnitTest    # parser/editor round-trip tests + JVM-rendered screenshots (app/build/screenshots)
 ```
 
 Requires JDK 21 and Android SDK 37. Minimum Android version: 8.0 (API 26). Real glass blur needs Android 12+ and refraction needs Android 13+. Older versions show a frosted fallback.
@@ -51,5 +70,6 @@ app/src/main/java/app/lumen/reader/
   table/     CSV/XLSX parsing and the canvas grid
   text/      text loading, encoding detection, syntax highlighting
   image/ media/ archive/ viewer/   remaining viewers and shared chrome
+  edit/      shared colour engine (Look), editor widgets, photo/ and video/ editors
   ui/        theme, glass components, home screen
 ```

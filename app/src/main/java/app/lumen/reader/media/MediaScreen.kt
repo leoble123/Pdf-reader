@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Audiotrack
+import androidx.compose.material.icons.rounded.VideoSettings
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -165,6 +166,13 @@ fun MediaScreen(ref: DocRef, onBack: () -> Unit) {
         subtitle = if (isVideo) "Video" else listOfNotNull(info?.artist, info?.album).joinToString(" · ").ifEmpty { "Audio" },
         chromeVisible = chrome || !isVideo || !playing,
         onBack = onBack,
+        actions = { b ->
+            val navigate = app.lumen.reader.core.LocalNavigator.current
+            if (isVideo) GlassIconButton(Icons.Rounded.VideoSettings, "Edit video", b, {
+                player.pause()
+                navigate(app.lumen.reader.core.Route.VideoEdit(listOf(ref)))
+            })
+        },
         bottomBar = { b ->
             Controls(
                 b, playing, position, duration, speeds[speedIndex],

@@ -42,6 +42,9 @@ object DocxParser {
         var row: ArrayList<AnnotatedString>? = null
         var cell: StyledText? = null
         var inText = false
+        var pOrdinal = -1
+        var paraOrd = -1
+        val sourceMap = HashMap<Int, Int>()
 
         fun current(): StyledText = cell ?: para ?: StyledText().also { para = it }
 
@@ -55,7 +58,10 @@ object DocxParser {
                     "w:tr" -> if (tableDepth == 1) row = ArrayList()
                     "w:tc" -> if (tableDepth == 1) cell = StyledText()
                     "w:p" -> {
-                        if (cell == null) para = StyledText()
+                        pOrdinal++
+                        if (cell == null) {
+                            para = StyledText(); paraOrd = pOrdinal
+                        }
                         else cell.let { if (!it.isBlank) it.lineBreak() }
                         style = null; numId = null; ilvl = 0; align = Align.Start
                     }
@@ -105,6 +111,7 @@ object DocxParser {
                     "w:p" -> if (cell == null) {
                         val text = para?.build() ?: AnnotatedString("")
                         para = null
+                        if (text.isNotBlank()) sourceMap[blocks.size] = paraOrd
                         val level = style?.let { headingStyles[it] }
                         if (numId == null) style?.let { styleNumbering[it] }?.let { (n, l) ->
                             numId = n; ilvl = l
@@ -169,7 +176,7 @@ object DocxParser {
             }
             t?.takeIf { it.isNotBlank() }
         }
-        return RichDoc(blocks, title, toc, "Word document", zip)
+        return RichDoc(blocks, title, toc, "Word document", zip, sourceMap)
     }
 
     private fun headingStyles(zip: Archive, numbered: MutableMap<String, Pair<String, Int>>): Map<String, Int> {

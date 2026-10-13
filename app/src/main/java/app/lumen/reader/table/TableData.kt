@@ -5,9 +5,32 @@ import org.xmlpull.v1.XmlPullParser
 import java.util.Calendar
 import java.util.TimeZone
 
-class Sheet(val name: String, val rows: List<Array<String>>, val columns: Int)
+class Sheet(val name: String, rows: List<Array<String>>, columns: Int, val path: String? = null) {
+    val rows: MutableList<Array<String>> = rows.toMutableList()
+    var columns: Int = columns
+        private set
 
-class Workbook(val sheets: List<Sheet>, val truncated: Boolean)
+    /** Edits made in the app: (row, col) → new value, both 0-based. */
+    val edits = LinkedHashMap<Pair<Int, Int>, String>()
+
+    fun set(row: Int, col: Int, value: String) {
+        while (rows.size <= row) rows.add(emptyArray())
+        var r = rows[row]
+        if (r.size <= col) r = r.copyOf(col + 1).map { it ?: "" }.toTypedArray()
+        r[col] = value
+        rows[row] = r
+        columns = maxOf(columns, col + 1)
+        edits[row to col] = value
+    }
+
+    fun addRow() {
+        rows.add(Array(columns) { "" })
+    }
+}
+
+class Workbook(val sheets: List<Sheet>, val truncated: Boolean, val delimiter: Char = ',') {
+    val isEdited: Boolean get() = sheets.any { it.edits.isNotEmpty() }
+}
 
 object Csv {
 
@@ -53,7 +76,7 @@ object Csv {
             cols = maxOf(cols, row.size)
             rows += row.toTypedArray()
         }
-        return Workbook(listOf(Sheet("Sheet", rows, cols)), truncated)
+        return Workbook(listOf(Sheet("Sheet", rows, cols)), truncated, delimiter)
     }
 
     private fun countOutsideQuotes(s: String, d: Char): Int {
@@ -154,7 +177,7 @@ object Xlsx {
         dateStyles: Set<Int>,
         budget: Int
     ): Pair<Sheet, Boolean> {
-        val p = zip.parser(path) ?: return Sheet(name, emptyList(), 0) to false
+        val p = zip.parser(path) ?: return Sheet(name, emptyList(), 0, path) to false
         val rows = ArrayList<Array<String>>()
         var current = HashMap<Int, String>()
         var rowIndex = -1
@@ -220,7 +243,7 @@ object Xlsx {
         commitRow()
         // Trim trailing empty rows
         while (rows.isNotEmpty() && rows.last().all { it.isEmpty() }) rows.removeAt(rows.lastIndex)
-        return Sheet(name, rows, maxCol) to truncated
+        return Sheet(name, rows, maxCol, path) to truncated
     }
 
     fun columnIndex(ref: String): Int {

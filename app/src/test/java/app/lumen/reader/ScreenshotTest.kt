@@ -42,8 +42,14 @@ class ScreenshotTest {
         return DocRef(Uri.fromFile(f), name, null, f.length(), kind)
     }
 
+    private val pickers = app.lumen.reader.core.Pickers({ _, _ -> null }, { _, _ -> emptyList() })
+
     private fun shoot(name: String, dark: Boolean = true, settleMs: Long = 2500, content: @Composable () -> Unit) {
-        compose.setContent { LumenTheme(dark = dark) { content() } }
+        compose.setContent {
+            LumenTheme(dark = dark) {
+                androidx.compose.runtime.CompositionLocalProvider(app.lumen.reader.core.LocalPickers provides pickers) { content() }
+            }
+        }
         var waited = 0L
         while (waited < settleMs) {
             Thread.sleep(100)
@@ -101,5 +107,31 @@ class ScreenshotTest {
         val ref = DocRef(Uri.fromFile(f), "mystery.bin", null, f.length(), FileKind.Unknown)
         val recents = Recents(ApplicationProvider.getApplicationContext())
         shoot("viewer_unknown") { DocumentViewer(ref, recents, {}, {}) }
+    }
+
+    @Test fun textEditor() {
+        val ref = fixture("sample.md").copy(kind = FileKind.Markdown)
+        shoot("edit_markdown") { app.lumen.reader.text.TextScreen(ref, onBack = {}, startEditing = true) }
+    }
+
+    @Test fun codeEditor() {
+        val src = File("src/main/java/app/lumen/reader/edit/video/VideoModel.kt")
+        val ref = DocRef(Uri.fromFile(src.absoluteFile), "VideoModel.kt", null, src.length(), FileKind.Code)
+        shoot("edit_code") { app.lumen.reader.text.TextScreen(ref, onBack = {}, startEditing = true) }
+    }
+
+    @Test fun docxEditor() {
+        val ref = fixture("sample.docx")
+        val doc = app.lumen.reader.rich.Archive(File(ref.uri.path!!)).let { app.lumen.reader.rich.DocxParser.parse(it) }
+        shoot("edit_docx") { app.lumen.reader.rich.DocxEditScreen(ref, doc) {} }
+    }
+
+    @Test fun photoEditor() {
+        shoot("edit_photo", settleMs = 4000) { app.lumen.reader.edit.photo.PhotoEditorScreen(fixture("sample.jpg")) {} }
+    }
+
+    @Test fun videoEditor() {
+        val img = fixture("sample.jpg")
+        shoot("edit_video", settleMs = 4000) { app.lumen.reader.edit.video.VideoEditorScreen(listOf(img, img)) {} }
     }
 }

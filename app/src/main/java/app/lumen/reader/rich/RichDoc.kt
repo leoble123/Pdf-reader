@@ -28,5 +28,7 @@ class RichDoc(
     val toc: List<Pair<String, Int>> = emptyList(),
     val kindLabel: String,
     /** Keeps e.g. the backing zip open for lazy image loading; closed when the viewer leaves. */
-    val resources: java.io.Closeable? = null
+    val resources: java.io.Closeable? = null,
+    /** DOCX only: block index → ordinal of the `<w:p>` it came from, so edits can be written back. */
+    val sourceMap: Map<Int, Int> = emptyMap()
 )

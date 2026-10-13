@@ -69,8 +69,13 @@ class Recents(context: Context) {
     }
 
     private fun takePermission(uri: Uri) {
+        // Ask for write access too so edits can be saved back in place; fall back to read-only.
         runCatching {
-            app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            app.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }.onFailure {
+            runCatching { app.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         }
     }
 

@@ -29,7 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
-import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -99,7 +99,9 @@ fun RichDocScreen(ref: DocRef, recents: Recents, onBack: () -> Unit) {
     var doc by remember { mutableStateOf<RichDoc?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var showSource by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(ref) {
+    var docxEditing by rememberSaveable { mutableStateOf(false) }
+    var version by remember { mutableIntStateOf(0) }
+    LaunchedEffect(ref, version) {
         runCatching { loadRichDoc(context, ref) }
             .onSuccess { doc = it }
             .onFailure { error = it.message ?: "This document couldn't be read" }
@@ -107,10 +109,22 @@ fun RichDocScreen(ref: DocRef, recents: Recents, onBack: () -> Unit) {
     doc?.let { d -> DisposableEffect(d) { onDispose { d.resources?.close() } } }
 
     if (showSource && ref.kind == FileKind.Markdown) {
-        TextScreen(ref.copy(kind = FileKind.Code), onBack = { showSource = false })
+        TextScreen(
+            ref.copy(kind = FileKind.Markdown),
+            onBack = { showSource = false },
+            startEditing = true,
+            onSaved = { version++ }
+        )
         return
     }
     val d = doc
+    if (docxEditing && d != null) {
+        DocxEditScreen(ref, d, onDone = { saved ->
+            docxEditing = false
+            if (saved) version++
+        })
+        return
+    }
     when {
         error != null -> ViewerScaffold(ref, ref.name, ref.kind.label, true, onBack) {
             CenteredMessage("Couldn't open this document", error)
@@ -119,13 +133,17 @@ fun RichDocScreen(ref: DocRef, recents: Recents, onBack: () -> Unit) {
         d.blocks.isEmpty() -> ViewerScaffold(ref, ref.name, ref.kind.label, true, onBack) {
             CenteredMessage("Nothing to show", "This document doesn't contain any readable text.")
         }
-        else -> Reader(ref, d, recents, onBack, onSource = if (ref.kind == FileKind.Markdown) ({ showSource = true }) else null)
+        else -> Reader(ref, d, recents, onBack, onEdit = when (ref.kind) {
+            FileKind.Markdown -> ({ showSource = true })
+            FileKind.Docx -> ({ docxEditing = true })
+            else -> null
+        })
     }
 }
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 @Composable
-private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Unit, onSource: (() -> Unit)?) {
+private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Unit, onEdit: (() -> Unit)?) {
     val colors = Lumen.colors
     val type = Lumen.type
     val scope = rememberCoroutineScope()
@@ -167,7 +185,7 @@ private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Un
             GlassIconButton(Icons.Rounded.TextFields, "Reading options", b, {
                 panel = if (panel == "aa") null else "aa"
             })
-            if (onSource != null) GlassIconButton(Icons.Rounded.Code, "View source", b, onSource)
+            if (onEdit != null) GlassIconButton(Icons.Rounded.Edit, "Edit", b, onEdit)
         },
         bottomBar = { b ->
             BottomPill(b) {

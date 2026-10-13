@@ -41,6 +41,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.VideoSettings
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.outlined.PushPin
@@ -76,6 +79,7 @@ import app.lumen.reader.ui.theme.LumenColors
 import app.lumen.reader.viewer.kindAccent
 import app.lumen.reader.viewer.kindIcon
 import com.kyant.backdrop.backdrops.layerBackdrop
+import kotlinx.coroutines.launch
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 /** MIME groups for the quick-open chips. */
@@ -96,7 +100,12 @@ enum class PickGroup(val label: String, val mimes: Array<String>) {
 }
 
 @Composable
-fun HomeScreen(recents: Recents, onPick: (PickGroup) -> Unit, onOpen: (RecentEntry) -> Unit) {
+fun HomeScreen(
+    recents: Recents,
+    onPick: (PickGroup) -> Unit,
+    onOpen: (RecentEntry) -> Unit,
+    onCreate: (app.lumen.reader.core.Route) -> Unit = {}
+) {
     val colors = Lumen.colors
     val type = Lumen.type
     val backdrop = rememberLayerBackdrop()
@@ -139,6 +148,10 @@ fun HomeScreen(recents: Recents, onPick: (PickGroup) -> Unit, onOpen: (RecentEnt
                                 Chip(g.label) { onPick(g) }
                             }
                         }
+                        Spacer(Modifier.height(22.dp))
+                        SectionTitle("Create")
+                        Spacer(Modifier.height(10.dp))
+                        CreateRow(recents, onCreate)
                     }
                 }
                 if (entries.isEmpty()) {
@@ -237,6 +250,74 @@ private fun Chip(label: String, onClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         BasicText(label, style = Lumen.type.label.copy(color = colors.content))
+    }
+}
+
+@Composable
+private fun CreateRow(recents: Recents, onCreate: (app.lumen.reader.core.Route) -> Unit) {
+    val context = LocalContext.current
+    val pickers = app.lumen.reader.core.LocalPickers.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        CreateTile(
+            "Photo editor", "Crop, light, color, draw",
+            androidx.compose.material.icons.Icons.Rounded.AutoFixHigh, Color(0xFF34C77B), Color(0xFF1FA2FF)
+        ) { onCreate(app.lumen.reader.core.Route.PhotoEdit(null)) }
+        CreateTile(
+            "Video editor", "Trim, split, music, export",
+            androidx.compose.material.icons.Icons.Rounded.VideoSettings, Color(0xFFFF8A3D), Color(0xFFFF4FA3)
+        ) { onCreate(app.lumen.reader.core.Route.VideoEdit(emptyList())) }
+        CreateTile(
+            "New note", "Markdown, saved anywhere",
+            androidx.compose.material.icons.Icons.Rounded.EditNote, Color(0xFF8B7CFF), Color(0xFF5B6CFF)
+        ) {
+            scope.launch {
+                val uri = pickers.createDocument("Note.md", "text/markdown") ?: return@launch
+                val ok = app.lumen.reader.core.Saver.overwrite(context, uri) { it.write("# New note\n\n".toByteArray()) }
+                if (!ok) return@launch
+                val ref = app.lumen.reader.core.Docs.resolve(context, uri, "text/markdown")
+                    .let { if (it.kind == FileKind.Markdown) it else it.copy(kind = FileKind.Markdown) }
+                recents.record(ref)
+                onCreate(app.lumen.reader.core.Route.Doc(ref))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreateTile(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    from: Color,
+    to: Color,
+    onClick: () -> Unit
+) {
+    val colors = Lumen.colors
+    val type = Lumen.type
+    Column(
+        Modifier
+            .width(168.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(colors.surface.copy(alpha = if (colors.isDark) 0.62f else 0.82f))
+            .clickable(onClick = onClick)
+            .padding(16.dp)
+    ) {
+        Box(
+            Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Brush.linearGradient(listOf(from, to))),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(icon, null, Modifier.size(24.dp), colorFilter = ColorFilter.tint(Color.White))
+        }
+        Spacer(Modifier.height(12.dp))
+        BasicText(title, style = type.headline.copy(color = colors.content))
+        BasicText(subtitle, style = type.caption.copy(color = colors.contentTertiary), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

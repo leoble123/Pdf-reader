@@ -72,6 +72,24 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import app.lumen.reader.core.DocRef
+import app.lumen.reader.core.LocalPickers
+import app.lumen.reader.core.Saver
+import app.lumen.reader.edit.PillButton
+import app.lumen.reader.edit.toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.rounded.Redo
+import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.rounded.BorderColor
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.CleaningServices
+import androidx.compose.material.icons.rounded.Draw
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.SaveAlt
+import androidx.compose.material.icons.rounded.TextFields
+import androidx.compose.ui.graphics.Color
 import app.lumen.reader.core.Recents
 import app.lumen.reader.ui.glass.GlassButton
 import app.lumen.reader.ui.glass.GlassIconButton
@@ -205,6 +223,28 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
     var activeHit by remember { mutableIntStateOf(-1) }
     var searchProgress by remember { mutableFloatStateOf(0f) }
     var goTo by remember { mutableStateOf(false) }
+    val ink = remember(ref) { InkController.forDoc(context, ref) }
+    val pickers = LocalPickers.current
+    var markup by rememberSaveable { mutableStateOf(false) }
+    var note by remember { mutableStateOf<Triple<Int, Float, Float>?>(null) }
+    var exportProgress by remember { mutableStateOf<Float?>(null) }
+
+    fun export() {
+        if (exportProgress != null) return
+        scope.launch {
+            exportProgress = 0f
+            val tmp = java.io.File(context.cacheDir, "export.pdf")
+            val ok = runCatching { tmp.outputStream().use { exportFlattened(doc, ink, it) { p -> exportProgress = p } } }.isSuccess
+            exportProgress = null
+            if (!ok) {
+                toast(context, "Export failed"); return@launch
+            }
+            val name = ref.name.substringBeforeLast('.') + " (annotated).pdf"
+            toast(context, Saver.saveCopy(context, pickers, name, "application/pdf") { out -> tmp.inputStream().use { it.copyTo(out) } })
+            tmp.delete()
+        }
+    }
+    androidx.activity.compose.BackHandler(markup && note == null) { markup = false }
 
     LaunchedEffect(doc) { doc.measurePages() }
     LaunchedEffect(doc) {
@@ -213,7 +253,7 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
     // Hide chrome as soon as the reader starts moving through pages.
     LaunchedEffect(doc) {
         snapshotFlow { state.listState.isScrollInProgress || state.isZoomed }.collect { moving ->
-            if (moving && !searching && !goTo) chrome = false
+            if (moving && !searching && !goTo && !markup) chrome = false
         }
     }
     LaunchedEffect(query, searching) {
@@ -256,7 +296,7 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
         ref = ref,
         title = ref.name,
         subtitle = "PDF · ${doc.pageCount} pages",
-        chromeVisible = chrome || searching,
+        chromeVisible = chrome || searching || markup,
         onBack = { if (searching) searching = false else onBack() },
         titleSlot = if (searching) {
             { backdrop ->
@@ -272,19 +312,31 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
             }
         } else null,
         actions = { backdrop ->
-            if (searching) {
+            if (markup) {
+                GlassIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", backdrop, { ink.undo() },
+                    iconTint = if (ink.canUndo) Color.Unspecified else colors.contentTertiary)
+                GlassIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", backdrop, { ink.redo() },
+                    iconTint = if (ink.canRedo) Color.Unspecified else colors.contentTertiary)
+                GlassIconButton(Icons.Rounded.SaveAlt, "Export annotated PDF", backdrop, ::export)
+                GlassIconButton(Icons.Rounded.Check, "Done", backdrop, { markup = false }, tint = colors.accent, iconTint = Color.White)
+            } else if (searching) {
                 GlassIconButton(Icons.Rounded.KeyboardArrowUp, "Previous", backdrop, { stepHit(-1) })
                 GlassIconButton(Icons.Rounded.KeyboardArrowDown, "Next", backdrop, { stepHit(1) })
             } else {
                 if (doc.supportsText) {
                     GlassIconButton(Icons.Rounded.Search, "Search", backdrop, { searching = true })
                 }
+                GlassIconButton(Icons.Rounded.Draw, "Markup", backdrop, { markup = true; goTo = false })
                 GlassIconButton(Icons.Rounded.Palette, "Page color", backdrop, {
                     theme = PageTheme.entries[(theme.ordinal + 1) % PageTheme.entries.size]
                 })
             }
         },
         bottomBar = { backdrop ->
+            if (markup) {
+                InkToolbar(backdrop, ink)
+                return@ViewerScaffold
+            }
             BottomPill(backdrop, Modifier.clickable(interactionSource = null, indication = null) { goTo = !goTo }) {
                 BasicText(
                     pageLabel,
@@ -299,6 +351,16 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
             }
         },
         overlay = { backdrop ->
+            exportProgress?.let { p ->
+                GlassPanel(backdrop, Modifier.align(Alignment.Center).width(260.dp), cornerRadius = 26.dp) {
+                    Column(Modifier.padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        BasicText("Exporting… ${(p * 100).toInt()}%", style = type.headline.copy(color = colors.content))
+                    }
+                }
+            }
+            note?.let { (page, x, y) ->
+                NotePanel(backdrop, onAdd = { text -> ink.addNote(page, x, y, text); note = null }, onCancel = { note = null })
+            }
             PageScrubber(backdrop, state, doc.pageCount, visible = chrome || state.isInteracting || state.listState.isScrollInProgress)
             AnimatedVisibility(
                 goTo,
@@ -320,8 +382,11 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
             hits = hits,
             activeHit = hitOrder.getOrNull(activeHit),
             onTap = {
-                if (goTo) goTo = false else chrome = !chrome
+                if (goTo) goTo = false else if (!markup) chrome = !chrome
             },
+            ink = ink,
+            inkActive = markup,
+            onNoteRequest = { p, x, y -> note = Triple(p, x, y) },
             onLink = { link ->
                 when {
                     link.page != null -> scope.launch { state.jumpTo(link.page) }
@@ -331,6 +396,95 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun InkToolbar(backdrop: Backdrop, ink: InkController) {
+    val colors = Lumen.colors
+    GlassPanel(backdrop, Modifier.padding(horizontal = 12.dp).widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 28.dp) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                listOf(
+                    InkTool.Pen to Icons.Rounded.Edit,
+                    InkTool.Highlighter to Icons.Rounded.BorderColor,
+                    InkTool.Eraser to Icons.Rounded.CleaningServices,
+                    InkTool.Text to Icons.Rounded.TextFields
+                ).forEach { (tool, icon) ->
+                    val sel = ink.tool == tool
+                    Box(
+                        Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(if (sel) colors.accent else androidx.compose.ui.graphics.Color.Transparent)
+                            .clickable {
+                                if (sel && tool != InkTool.Eraser && tool != InkTool.Text) {
+                                    // Tapping the active pen cycles its thickness.
+                                    ink.width = when {
+                                        ink.width < 0.003f -> 0.004f
+                                        ink.width < 0.006f -> 0.008f
+                                        else -> 0.0022f
+                                    }
+                                }
+                                ink.tool = tool
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.foundation.Image(
+                            icon, tool.name, Modifier.size(22.dp),
+                            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(if (sel) colors.onAccent else colors.content)
+                        )
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                InkController.Palette.forEach { c ->
+                    val sel = ink.color == c
+                    Box(
+                        Modifier
+                            .size(if (sel) 30.dp else 24.dp)
+                            .clip(CircleShape)
+                            .background(androidx.compose.ui.graphics.Color(c))
+                            .border(2.dp, if (sel) colors.accent else colors.hairline, CircleShape)
+                            .clickable { ink.color = c }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoxScope.NotePanel(backdrop: Backdrop, onAdd: (String) -> Unit, onCancel: () -> Unit) {
+    val colors = Lumen.colors
+    val type = Lumen.type
+    var text by remember { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    androidx.activity.compose.BackHandler(onBack = onCancel)
+    GlassPanel(
+        backdrop,
+        Modifier.align(Alignment.BottomCenter).imePadding().padding(16.dp).widthIn(max = 520.dp).fillMaxWidth(),
+        cornerRadius = 26.dp
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            BasicTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = true,
+                textStyle = type.body.copy(color = colors.content),
+                cursorBrush = SolidColor(colors.accent),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onAdd(text) }),
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(colors.content.copy(alpha = 0.07f))
+                    .padding(horizontal = 12.dp, vertical = 12.dp)
+                    .focusRequester(focus)
+            )
+            PillButton("Add", Modifier.padding(start = 8.dp)) { onAdd(text) }
+        }
     }
 }
 
