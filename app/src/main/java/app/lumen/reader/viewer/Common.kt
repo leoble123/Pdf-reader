@@ -57,27 +57,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.lumen.reader.core.DocRef
 import app.lumen.reader.core.formatBytes
-import app.lumen.reader.ui.glass.GlassPanel
 import app.lumen.reader.ui.theme.Lumen
-import com.kyant.backdrop.Backdrop
 
 @Composable
 fun LoadingIndicator(modifier: Modifier = Modifier) {
-    val colors = Lumen.colors
-    val t = rememberInfiniteTransition(label = "spin")
-    val angle by t.animateFloat(0f, 360f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "a")
-    val sweep by t.animateFloat(40f, 250f, infiniteRepeatable(tween(1100), RepeatMode.Reverse), label = "s")
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(36.dp)) {
-            rotate(angle) {
-                drawArc(
-                    colors.accent, 0f, sweep, false,
-                    topLeft = Offset(2.dp.toPx(), 2.dp.toPx()),
-                    size = Size(size.width - 4.dp.toPx(), size.height - 4.dp.toPx()),
-                    style = Stroke(3.dp.toPx(), cap = StrokeCap.Round)
-                )
-            }
-        }
+        androidx.compose.material3.CircularProgressIndicator()
     }
 }
 
@@ -105,40 +90,47 @@ fun CenteredMessage(title: String, message: String?, icon: ImageVector? = null, 
 }
 
 @Composable
-internal fun BoxScope.ViewerMenu(ref: DocRef, backdrop: Backdrop, open: Boolean, top: Dp, onDismiss: () -> Unit) {
+internal fun ViewerMenu(ref: DocRef, open: Boolean, extra: List<MenuAction>, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var showInfo by remember { mutableStateOf(false) }
-    if (open || showInfo) {
-        Box(Modifier.fillMaxSize().clickable(interactionSource = null, indication = null) {
-            onDismiss(); showInfo = false
-        })
-    }
-    AnimatedVisibility(
-        open || showInfo,
-        modifier = Modifier.align(Alignment.TopEnd).padding(top = top + TopBarHeight + 16.dp, end = 12.dp),
-        enter = fadeIn() + scaleIn(initialScale = 0.85f, transformOrigin = TransformOrigin(1f, 0f)),
-        exit = fadeOut() + scaleOut(targetScale = 0.85f, transformOrigin = TransformOrigin(1f, 0f))
-    ) {
-        GlassPanel(backdrop, Modifier.width(240.dp), cornerRadius = 24.dp) {
-            if (showInfo) {
-                InfoContent(ref)
-            } else {
-                Column(Modifier.padding(vertical = 8.dp)) {
-                    MenuItem(Icons.Rounded.Share, "Share") {
-                        onDismiss()
-                        launch(context, Intent.createChooser(app.lumen.reader.core.Docs.shareIntent(ref), "Share"))
-                    }
-                    MenuItem(Icons.AutoMirrored.Rounded.OpenInNew, "Open with…") {
-                        onDismiss()
-                        launch(context, Intent.createChooser(app.lumen.reader.core.Docs.openWithIntent(ref), "Open with"))
-                    }
-                    MenuItem(Icons.Rounded.Info, "Details") {
-                        showInfo = true
-                        onDismiss()
-                    }
-                }
-            }
+    androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = onDismiss) {
+        extra.forEach { a ->
+            androidx.compose.material3.DropdownMenuItem(
+                text = { androidx.compose.material3.Text(a.label) },
+                leadingIcon = { androidx.compose.material3.Icon(a.icon, null) },
+                onClick = { onDismiss(); a.onClick() }
+            )
         }
+        if (extra.isNotEmpty()) androidx.compose.material3.HorizontalDivider()
+        androidx.compose.material3.DropdownMenuItem(
+            text = { androidx.compose.material3.Text("Share") },
+            leadingIcon = { androidx.compose.material3.Icon(Icons.Rounded.Share, null) },
+            onClick = {
+                onDismiss()
+                launch(context, Intent.createChooser(app.lumen.reader.core.Docs.shareIntent(ref), "Share"))
+            }
+        )
+        androidx.compose.material3.DropdownMenuItem(
+            text = { androidx.compose.material3.Text("Open with…") },
+            leadingIcon = { androidx.compose.material3.Icon(Icons.AutoMirrored.Rounded.OpenInNew, null) },
+            onClick = {
+                onDismiss()
+                launch(context, Intent.createChooser(app.lumen.reader.core.Docs.openWithIntent(ref), "Open with"))
+            }
+        )
+        androidx.compose.material3.DropdownMenuItem(
+            text = { androidx.compose.material3.Text("Details") },
+            leadingIcon = { androidx.compose.material3.Icon(Icons.Rounded.Info, null) },
+            onClick = { onDismiss(); showInfo = true }
+        )
+    }
+    if (showInfo) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showInfo = false },
+            confirmButton = { androidx.compose.material3.TextButton({ showInfo = false }) { androidx.compose.material3.Text("Done") } },
+            title = { androidx.compose.material3.Text(ref.name) },
+            text = { InfoContent(ref) }
+        )
     }
 }
 
@@ -153,29 +145,10 @@ private fun launch(context: android.content.Context, intent: Intent) {
 }
 
 @Composable
-private fun MenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
-    val colors = Lumen.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Image(icon, null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(colors.content))
-        BasicText(label, style = Lumen.type.label.copy(color = colors.content))
-    }
-}
-
-@Composable
 private fun InfoContent(ref: DocRef) {
     val colors = Lumen.colors
     val type = Lumen.type
-    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        BasicText(ref.name, style = type.headline.copy(color = colors.content))
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         listOf(
             "Type" to ref.kind.label,
             "Size" to formatBytes(ref.size),

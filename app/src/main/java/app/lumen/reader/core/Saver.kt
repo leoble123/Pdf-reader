@@ -102,14 +102,22 @@ object Saver {
         if (Build.VERSION.SDK_INT < 29) return saveCopy(context, pickers, name, mime, write)
         return withContext(Dispatchers.IO) {
             val video = mime.startsWith("video/")
-            val collection = if (video) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val audio = mime.startsWith("audio/")
+            val collection = when {
+                video -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                audio -> MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                else -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            }
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, name)
                 put(MediaStore.MediaColumns.MIME_TYPE, mime)
                 put(
                     MediaStore.MediaColumns.RELATIVE_PATH,
-                    (if (video) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES) + "/Lumen"
+                    when {
+                        video -> Environment.DIRECTORY_MOVIES
+                        audio -> Environment.DIRECTORY_MUSIC
+                        else -> Environment.DIRECTORY_PICTURES
+                    } + "/Lumen"
                 )
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }

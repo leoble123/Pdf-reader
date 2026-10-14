@@ -49,8 +49,8 @@ import app.lumen.reader.core.Saver
 import app.lumen.reader.edit.PillButton
 import app.lumen.reader.edit.UnsavedChangesPanel
 import app.lumen.reader.edit.toast
-import app.lumen.reader.ui.glass.GlassIconButton
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.AppIconButton
+import app.lumen.reader.ui.components.Panel
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.LoadingIndicator
 import app.lumen.reader.viewer.ViewerScaffold
@@ -147,10 +147,10 @@ fun DocxEditScreen(ref: DocRef, doc: RichDoc, onDone: (saved: Boolean) -> Unit) 
         subtitle = if (s?.isDirty == true) "Edited · not saved" else "Tap a paragraph to edit",
         chromeVisible = true,
         onBack = ::exit,
-        actions = { b ->
-            GlassIconButton(Icons.Rounded.Check, "Save", b, { save(false) }, tint = colors.accent, iconTint = Color.White)
+        actions = {
+            AppIconButton(Icons.Rounded.Check, "Save", { save(false) }, tint = colors.accent, iconTint = Color.White)
         },
-        overlay = { b ->
+        overlay = {
             val sel = selected
             AnimatedVisibility(
                 sel != null,
@@ -158,7 +158,7 @@ fun DocxEditScreen(ref: DocRef, doc: RichDoc, onDone: (saved: Boolean) -> Unit) 
                 enter = fadeIn() + slideInVertically { it / 2 },
                 exit = fadeOut() + slideOutVertically { it / 2 }
             ) {
-                if (sel != null) GlassPanel(b, Modifier.widthIn(max = 620.dp).fillMaxWidth(), cornerRadius = 26.dp) {
+                if (sel != null) Panel(Modifier.widthIn(max = 620.dp).fillMaxWidth(), cornerRadius = 26.dp) {
                     val focus = remember { FocusRequester() }
                     LaunchedEffect(sel) { focus.requestFocus() }
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -200,7 +200,7 @@ fun DocxEditScreen(ref: DocRef, doc: RichDoc, onDone: (saved: Boolean) -> Unit) 
                 }
             }
             UnsavedChangesPanel(
-                b, confirmExit,
+                confirmExit,
                 onSave = { confirmExit = false; save(true) },
                 onDiscard = { confirmExit = false; onDone(false) },
                 onCancel = { confirmExit = false }

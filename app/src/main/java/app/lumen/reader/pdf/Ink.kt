@@ -128,6 +128,13 @@ class InkController(private val file: File) {
         persist()
     }
 
+    /** Forget all marks without an undo step (they were saved into the PDF). */
+    fun discard() {
+        undo.clear(); redo.clear()
+        pages.clear()
+        persist()
+    }
+
     fun clearAll() {
         snapshot()
         pages.clear()

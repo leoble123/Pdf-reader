@@ -12,8 +12,8 @@ android {
         applicationId = "app.lumen.reader"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
         androidResources.localeFilters += arrayOf("en")
     }
 
@@ -80,8 +80,8 @@ dependencies {
     implementation(libs.media3.transformer)
     implementation(libs.media3.effect)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.kyant.backdrop)
-    implementation(libs.kyant.shapes)
+    implementation(libs.compose.material3)
+    implementation(libs.androidx.profileinstaller)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

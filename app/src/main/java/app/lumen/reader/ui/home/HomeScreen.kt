@@ -1,13 +1,9 @@
 package app.lumen.reader.ui.home
 
 import android.text.format.DateUtils
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -30,57 +26,78 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.NoteAdd
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoFixHigh
-import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.VideoSettings
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Compress
+import androidx.compose.material.icons.rounded.CreateNewFolder
+import androidx.compose.material.icons.rounded.DocumentScanner
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.PushPin
-import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.VideoSettings
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.lumen.reader.core.Docs
 import app.lumen.reader.core.FileKind
+import app.lumen.reader.core.Folders
+import app.lumen.reader.core.LocalPickers
 import app.lumen.reader.core.RecentEntry
 import app.lumen.reader.core.Recents
+import app.lumen.reader.core.Route
+import app.lumen.reader.core.Saver
 import app.lumen.reader.core.Thumbs
 import app.lumen.reader.core.formatBytes
-import app.lumen.reader.ui.glass.GlassButton
-import app.lumen.reader.ui.glass.GlassPanel
-import app.lumen.reader.ui.theme.Lumen
-import app.lumen.reader.ui.theme.LumenColors
 import app.lumen.reader.viewer.kindAccent
 import app.lumen.reader.viewer.kindIcon
-import com.kyant.backdrop.backdrops.layerBackdrop
 import kotlinx.coroutines.launch
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 /** MIME groups for the quick-open chips. */
 enum class PickGroup(val label: String, val mimes: Array<String>) {
@@ -99,319 +116,270 @@ enum class PickGroup(val label: String, val mimes: Array<String>) {
     Archives("Archives", arrayOf("application/zip", "application/x-zip-compressed", "application/java-archive"))
 }
 
+private class Tool(val label: String, val icon: ImageVector, val run: () -> Unit)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     recents: Recents,
+    folders: Folders,
     onPick: (PickGroup) -> Unit,
     onOpen: (RecentEntry) -> Unit,
-    onCreate: (app.lumen.reader.core.Route) -> Unit = {}
+    onCreate: (Route) -> Unit,
+    onAddFolder: () -> Unit
 ) {
-    val colors = Lumen.colors
-    val type = Lumen.type
-    val backdrop = rememberLayerBackdrop()
+    val context = LocalContext.current
+    val pickers = LocalPickers.current
+    val scope = rememberCoroutineScope()
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     var menuFor by remember { mutableStateOf<RecentEntry?>(null) }
+    var searching by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    val grid = rememberLazyGridState()
+    val fabExpanded by remember { derivedStateOf { grid.firstVisibleItemIndex == 0 } }
 
-    val entries = recents.entries
+    val entries = recents.entries.filter { query.isBlank() || it.ref.name.contains(query, ignoreCase = true) }
     val pinned = entries.filter { it.pinned }
     val rest = entries.filter { !it.pinned }
 
-    Box(Modifier.fillMaxSize()) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .layerBackdrop(backdrop)
-                .drawBehind { drawAmbient(colors) }
-        ) {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(156.dp),
-                contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = top + 28.dp, bottom = bottom + 120.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                item(span = { GridItemSpan(maxLineSpan) }, key = "header") {
-                    Column {
-                        BasicText("Lumen", style = type.display.copy(color = colors.content))
-                        Spacer(Modifier.height(4.dp))
-                        BasicText(
-                            "Every file, beautifully. Fully offline.",
-                            style = type.body.copy(color = colors.contentSecondary)
-                        )
-                        Spacer(Modifier.height(22.dp))
-                        Row(
-                            Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            PickGroup.entries.drop(1).forEach { g ->
-                                Chip(g.label) { onPick(g) }
-                            }
-                        }
-                        Spacer(Modifier.height(22.dp))
-                        SectionTitle("Create")
-                        Spacer(Modifier.height(10.dp))
-                        CreateRow(recents, onCreate)
-                    }
-                }
-                if (entries.isEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }, key = "empty") { EmptyState() }
-                }
-                if (pinned.isNotEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }, key = "pinned-h") { SectionTitle("Pinned") }
-                    items(pinned, key = { "p" + it.ref.key }) { e ->
-                        RecentCard(e, Modifier.animateItem(), { onOpen(e) }, { menuFor = e })
-                    }
-                }
-                if (rest.isNotEmpty()) {
-                    item(span = { GridItemSpan(maxLineSpan) }, key = "recent-h") { SectionTitle("Recent") }
-                    items(rest, key = { "r" + it.ref.key }) { e ->
-                        RecentCard(e, Modifier.animateItem(), { onOpen(e) }, { menuFor = e })
-                    }
-                }
-            }
-        }
-
-        // Floating dock: the content scrolls beneath real refracting glass.
-        Box(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = bottom + 18.dp)
-        ) {
-            GlassButton(backdrop, onClick = { onPick(PickGroup.Any) }, tint = colors.accent, height = 58.dp) {
-                Image(Icons.Rounded.Add, null, Modifier.size(24.dp), colorFilter = ColorFilter.tint(Color.White))
-                BasicText("Open a file", style = type.headline.copy(color = Color.White))
-            }
-        }
-
-        if (menuFor != null) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.25f))
-                    .clickable(interactionSource = null, indication = null) { menuFor = null }
-            )
-        }
-        AnimatedVisibility(
-            menuFor != null,
-            modifier = Modifier.align(Alignment.Center),
-            enter = fadeIn() + scaleIn(initialScale = 0.9f),
-            exit = fadeOut() + scaleOut(targetScale = 0.9f)
-        ) {
-            val e = remember(menuFor) { menuFor } ?: return@AnimatedVisibility
-            GlassPanel(backdrop, Modifier.width(280.dp), cornerRadius = 28.dp) {
-                Column(Modifier.padding(vertical = 10.dp)) {
-                    BasicText(
-                        e.ref.name,
-                        style = type.headline.copy(color = colors.content),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp)
-                    )
-                    SheetItem(if (e.pinned) "Unpin" else "Pin to top", if (e.pinned) Icons.Outlined.PushPin else Icons.Rounded.PushPin) {
-                        recents.togglePin(e.ref); menuFor = null
-                    }
-                    SheetItem("Remove from recents", Icons.Rounded.Close) {
-                        recents.remove(e.ref); menuFor = null
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawAmbient(colors: LumenColors) {
-    drawRect(colors.background)
-    val w = size.width
-    val h = size.height
-    val a = if (colors.isDark) 0.55f else 0.45f
-    drawCircle(
-        Brush.radialGradient(listOf(colors.glow1.copy(alpha = a), Color.Transparent), Offset(w * 0.05f, h * 0.08f), w * 0.85f),
-        w * 0.85f, Offset(w * 0.05f, h * 0.08f)
-    )
-    drawCircle(
-        Brush.radialGradient(listOf(colors.glow2.copy(alpha = a * 0.8f), Color.Transparent), Offset(w * 1.0f, h * 0.35f), w * 0.8f),
-        w * 0.8f, Offset(w * 1.0f, h * 0.35f)
-    )
-    drawCircle(
-        Brush.radialGradient(listOf(colors.glow3.copy(alpha = a * 0.7f), Color.Transparent), Offset(w * 0.2f, h * 0.95f), w * 0.9f),
-        w * 0.9f, Offset(w * 0.2f, h * 0.95f)
-    )
-}
-
-@Composable
-private fun Chip(label: String, onClick: () -> Unit) {
-    val colors = Lumen.colors
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(colors.surface.copy(alpha = if (colors.isDark) 0.55f else 0.75f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
-    ) {
-        BasicText(label, style = Lumen.type.label.copy(color = colors.content))
-    }
-}
-
-@Composable
-private fun CreateRow(recents: Recents, onCreate: (app.lumen.reader.core.Route) -> Unit) {
-    val context = LocalContext.current
-    val pickers = app.lumen.reader.core.LocalPickers.current
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
-    Row(
-        Modifier.horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        CreateTile(
-            "Photo editor", "Crop, light, color, draw",
-            androidx.compose.material.icons.Icons.Rounded.AutoFixHigh, Color(0xFF34C77B), Color(0xFF1FA2FF)
-        ) { onCreate(app.lumen.reader.core.Route.PhotoEdit(null)) }
-        CreateTile(
-            "Video editor", "Trim, split, music, export",
-            androidx.compose.material.icons.Icons.Rounded.VideoSettings, Color(0xFFFF8A3D), Color(0xFFFF4FA3)
-        ) { onCreate(app.lumen.reader.core.Route.VideoEdit(emptyList())) }
-        CreateTile(
-            "New note", "Markdown, saved anywhere",
-            androidx.compose.material.icons.Icons.Rounded.EditNote, Color(0xFF8B7CFF), Color(0xFF5B6CFF)
-        ) {
+    val tools = listOf(
+        Tool("Scan", Icons.Rounded.DocumentScanner) { onCreate(Route.Scanner) },
+        Tool("PDF tools", Icons.Rounded.PictureAsPdf) { onCreate(Route.PdfTools(emptyList())) },
+        Tool("Photo editor", Icons.Rounded.AutoFixHigh) { onCreate(Route.PhotoEdit(null)) },
+        Tool("Video editor", Icons.Rounded.VideoSettings) { onCreate(Route.VideoEdit(emptyList())) },
+        Tool("Compress", Icons.Rounded.Compress) { onCreate(Route.MediaTool(Route.MediaTool.Tool.Compress, null)) },
+        Tool("New note", Icons.AutoMirrored.Rounded.NoteAdd) {
             scope.launch {
                 val uri = pickers.createDocument("Note.md", "text/markdown") ?: return@launch
-                val ok = app.lumen.reader.core.Saver.overwrite(context, uri) { it.write("# New note\n\n".toByteArray()) }
-                if (!ok) return@launch
-                val ref = app.lumen.reader.core.Docs.resolve(context, uri, "text/markdown")
+                if (!Saver.overwrite(context, uri) { it.write("# New note\n\n".toByteArray()) }) return@launch
+                val ref = Docs.resolve(context, uri, "text/markdown")
                     .let { if (it.kind == FileKind.Markdown) it else it.copy(kind = FileKind.Markdown) }
                 recents.record(ref)
-                onCreate(app.lumen.reader.core.Route.Doc(ref))
+                onCreate(Route.Doc(ref))
             }
         }
-    }
+    )
+
+    androidx.compose.material3.Surface(Modifier.fillMaxSize()) { Box(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            state = grid,
+            columns = GridCells.Adaptive(160.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = top + 8.dp, bottom = bottom + 104.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            full("header") {
+                Row(Modifier.padding(start = 4.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (searching) {
+                        TextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            placeholder = { Text("Search recent files") },
+                            leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                            trailingIcon = {
+                                IconButton({ query = ""; searching = false }) { Icon(Icons.Rounded.Close, "Close search") }
+                            },
+                            shape = RoundedCornerShape(28.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                    } else {
+                        Text("Lumen", style = MaterialTheme.typography.displaySmall, modifier = Modifier.weight(1f))
+                        IconButton({ searching = true }) { Icon(Icons.Rounded.Search, "Search") }
+                        IconButton({ onCreate(Route.Settings) }) { Icon(Icons.Rounded.Settings, "Settings") }
+                    }
+                }
+            }
+            if (!searching) {
+                full("chips") {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PickGroup.entries.drop(1).forEach { g ->
+                            AssistChip(onClick = { onPick(g) }, label = { Text(g.label) })
+                        }
+                    }
+                }
+                full("tools-h") { SectionTitle("Tools") }
+                full("tools") {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        maxItemsInEachRow = 3
+                    ) {
+                        tools.forEach { t -> ToolCard(t, Modifier.weight(1f)) }
+                    }
+                }
+                full("folders-h") { SectionTitle("Folders") }
+                full("folders") {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        folders.entries.forEach { f ->
+                            InputChip(
+                                selected = false,
+                                onClick = { onCreate(Route.Folder(f.tree, f.rootId, f.name)) },
+                                label = { Text(f.name) },
+                                leadingIcon = { Icon(Icons.Rounded.Folder, null, Modifier.size(18.dp)) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Rounded.Close, "Remove ${f.name}",
+                                        Modifier.size(18.dp).clip(CircleShape).clickable { folders.remove(f) }
+                                    )
+                                }
+                            )
+                        }
+                        AssistChip(
+                            onClick = onAddFolder,
+                            label = { Text("Add folder") },
+                            leadingIcon = { Icon(Icons.Rounded.CreateNewFolder, null, Modifier.size(18.dp)) }
+                        )
+                    }
+                }
+            }
+            if (recents.entries.isEmpty()) {
+                full("empty") { EmptyState() }
+            }
+            if (pinned.isNotEmpty()) {
+                full("pinned-h") { SectionTitle("Pinned") }
+                items(pinned, key = { "p" + it.ref.key }) { e -> RecentCard(e, Modifier.animateItem(), { onOpen(e) }, { menuFor = e }) }
+            }
+            if (rest.isNotEmpty()) {
+                full("recent-h") { SectionTitle("Recent") }
+                items(rest, key = { "r" + it.ref.key }) { e -> RecentCard(e, Modifier.animateItem(), { onOpen(e) }, { menuFor = e }) }
+            }
+        }
+
+        ExtendedFloatingActionButton(
+            onClick = { onPick(PickGroup.Any) },
+            expanded = fabExpanded,
+            icon = { Icon(Icons.Rounded.Add, null) },
+            text = { Text("Open file") },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = bottom + 16.dp)
+        )
+
+        menuFor?.let { e ->
+            ModalBottomSheet(onDismissRequest = { menuFor = null }) {
+                Text(
+                    e.ref.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                )
+                SheetItem(if (e.pinned) "Unpin" else "Pin to top", if (e.pinned) Icons.Outlined.PushPin else Icons.Rounded.PushPin) {
+                    recents.togglePin(e.ref); menuFor = null
+                }
+                if (e.ref.kind == FileKind.Pdf) {
+                    SheetItem("Organise pages", Icons.Rounded.PictureAsPdf) {
+                        menuFor = null; onCreate(Route.PdfTools(listOf(e.ref)))
+                    }
+                }
+                SheetItem("Remove from recents", Icons.Rounded.Close) {
+                    recents.remove(e.ref); menuFor = null
+                }
+                Spacer(Modifier.height(bottom + 16.dp))
+            }
+        }
+    } }
 }
 
-@Composable
-private fun CreateTile(
-    title: String,
-    subtitle: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    from: Color,
-    to: Color,
-    onClick: () -> Unit
-) {
-    val colors = Lumen.colors
-    val type = Lumen.type
-    Column(
-        Modifier
-            .width(168.dp)
-            .clip(RoundedCornerShape(24.dp))
-            .background(colors.surface.copy(alpha = if (colors.isDark) 0.62f else 0.82f))
-            .clickable(onClick = onClick)
-            .padding(16.dp)
-    ) {
-        Box(
-            Modifier
-                .size(44.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Brush.linearGradient(listOf(from, to))),
-            contentAlignment = Alignment.Center
-        ) {
-            Image(icon, null, Modifier.size(24.dp), colorFilter = ColorFilter.tint(Color.White))
-        }
-        Spacer(Modifier.height(12.dp))
-        BasicText(title, style = type.headline.copy(color = colors.content))
-        BasicText(subtitle, style = type.caption.copy(color = colors.contentTertiary), maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
+private fun LazyGridScope.full(key: String, content: @Composable () -> Unit) {
+    item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
 }
 
 @Composable
 private fun SectionTitle(text: String) {
-    BasicText(
+    Text(
         text,
-        style = Lumen.type.headline.copy(color = Lumen.colors.contentSecondary),
-        modifier = Modifier.padding(top = 10.dp, start = 4.dp)
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, top = 12.dp)
     )
 }
 
 @Composable
-private fun SheetItem(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
-    val colors = Lumen.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 22.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
+private fun ToolCard(tool: Tool, modifier: Modifier) {
+    Card(
+        onClick = tool.run,
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
     ) {
-        Image(icon, null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(colors.content))
-        BasicText(label, style = Lumen.type.label.copy(color = colors.content))
+        Column(Modifier.padding(vertical = 14.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(tool.icon, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            Spacer(Modifier.height(6.dp))
+            Text(tool.label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer, maxLines = 1)
+        }
     }
 }
 
 @Composable
+private fun SheetItem(label: String, icon: ImageVector, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(label) },
+        leadingContent = { Icon(icon, null) },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        modifier = Modifier.clickable(onClick = onClick)
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
 private fun RecentCard(entry: RecentEntry, modifier: Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
-    val colors = Lumen.colors
-    val type = Lumen.type
     val context = LocalContext.current
     val ref = entry.ref
     var thumb by remember(ref.key) { mutableStateOf(Thumbs.cached(ref)?.asImageBitmap()) }
     val fade = remember(ref.key) { Animatable(if (thumb != null) 1f else 0f) }
     LaunchedEffect(ref.key) {
-        if (thumb == null) {
-            Thumbs.load(context, ref)?.let {
-                thumb = it.asImageBitmap()
-                fade.animateTo(1f, tween(220))
-            }
+        if (thumb == null) Thumbs.load(context, ref)?.let {
+            thumb = it.asImageBitmap()
+            fade.animateTo(1f, tween(180))
         }
     }
     val accent = kindAccent(ref.kind)
-    Column(
-        modifier
-            .clip(RoundedCornerShape(22.dp))
-            .background(colors.surface.copy(alpha = if (colors.isDark) 0.62f else 0.82f))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    Card(
+        modifier = modifier.clip(CardDefaults.shape).combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
     ) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .aspectRatio(1.1f)
-                .padding(8.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(
-                    Brush.linearGradient(listOf(accent.copy(alpha = 0.28f), accent.copy(alpha = 0.10f)))
-                ),
+                .aspectRatio(1.15f)
+                .padding(6.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(accent.copy(alpha = 0.14f)),
             contentAlignment = Alignment.Center
         ) {
-            Image(kindIcon(ref.kind), null, Modifier.size(40.dp), colorFilter = ColorFilter.tint(accent))
+            Image(kindIcon(ref.kind), null, Modifier.size(36.dp), colorFilter = ColorFilter.tint(accent))
             thumb?.let {
                 Image(
                     it, null,
                     Modifier.fillMaxSize().graphicsLayer { alpha = fade.value },
-                    contentScale = if (ref.kind == FileKind.Pdf) ContentScale.Crop else ContentScale.Crop,
+                    contentScale = ContentScale.Crop,
                     alignment = Alignment.TopCenter
                 )
             }
             if (entry.pinned) {
-                Image(
+                Icon(
                     Icons.Rounded.PushPin, null,
-                    Modifier.align(Alignment.TopEnd).padding(8.dp).size(16.dp),
-                    colorFilter = ColorFilter.tint(Color.White)
+                    Modifier.align(Alignment.TopEnd).padding(6.dp).size(16.dp),
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
         }
-        Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp, top = 2.dp)) {
-            BasicText(
-                ref.name,
-                style = type.label.copy(color = colors.content),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.height(4.dp))
-            BasicText(
+        Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp, top = 2.dp)) {
+            Text(ref.name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
                 listOfNotNull(
                     ref.kind.label,
                     ref.size.takeIf { it >= 0 }?.let { formatBytes(it) },
-                    if (System.currentTimeMillis() - entry.openedAt < 60_000) "Just now" else DateUtils.getRelativeTimeSpanString(entry.openedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
+                    if (System.currentTimeMillis() - entry.openedAt < 60_000) "Just now"
+                    else DateUtils.getRelativeTimeSpanString(entry.openedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
                 ).joinToString(" · "),
-                style = type.caption.copy(color = colors.contentTertiary),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -421,44 +389,35 @@ private fun RecentCard(entry: RecentEntry, modifier: Modifier, onClick: () -> Un
 
 @Composable
 private fun EmptyState() {
-    val colors = Lumen.colors
-    val type = Lumen.type
-    Column(
-        Modifier
-            .padding(top = 8.dp)
-            .widthIn(max = 560.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(28.dp))
-            .background(colors.surface.copy(alpha = if (colors.isDark) 0.5f else 0.75f))
-            .padding(22.dp)
-    ) {
-        BasicText("Open anything", style = type.title.copy(color = colors.content))
-        Spacer(Modifier.height(6.dp))
-        BasicText(
-            "Tap “Open a file” or share a file to Lumen from any app. Everything renders on-device — nothing is ever uploaded.",
-            style = type.body.copy(color = colors.contentSecondary)
-        )
-        Spacer(Modifier.height(18.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(
-                FileKind.Pdf, FileKind.Docx, FileKind.Xlsx, FileKind.Pptx, FileKind.Epub, FileKind.Markdown,
-                FileKind.Code, FileKind.Csv, FileKind.Image, FileKind.Svg, FileKind.Video, FileKind.Audio,
-                FileKind.Html, FileKind.Zip, FileKind.Text
-            ).forEach { k ->
-                val accent = kindAccent(k)
-                Row(
-                    Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(accent.copy(alpha = 0.16f))
-                        .padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Image(kindIcon(k), null, Modifier.size(15.dp), colorFilter = ColorFilter.tint(accent))
-                    BasicText(k.label, style = type.caption.copy(color = colors.content))
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(Modifier.padding(20.dp)) {
+            Text("Open anything", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Tap “Open file”, add a folder, or share a file to Lumen from any app. Everything renders on-device — nothing is ever uploaded.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(16.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(
+                    FileKind.Pdf, FileKind.Docx, FileKind.Xlsx, FileKind.Pptx, FileKind.Epub, FileKind.Markdown,
+                    FileKind.Code, FileKind.Csv, FileKind.Image, FileKind.Svg, FileKind.Video, FileKind.Audio,
+                    FileKind.Html, FileKind.Zip, FileKind.Text
+                ).forEach { k ->
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(kindAccent(k).copy(alpha = 0.14f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(kindIcon(k), null, Modifier.size(15.dp), tint = kindAccent(k))
+                        Text(k.label, style = MaterialTheme.typography.labelMedium)
+                    }
                 }
             }
         }
     }
 }
-

@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import app.lumen.reader.core.DocRef
 import app.lumen.reader.viewer.CenteredMessage
 import app.lumen.reader.viewer.LoadingIndicator
@@ -86,11 +87,11 @@ fun ImageScreen(ref: DocRef, onBack: () -> Unit) {
         subtitle = d?.let { "${it.sourceWidth} × ${it.sourceHeight}" + (ref.extension.takeIf { e -> e.isNotEmpty() }?.let { e -> " · ${e.uppercase()}" } ?: "") },
         chromeVisible = chrome,
         onBack = onBack,
-        actions = { b ->
+        actions = {
             val navigate = app.lumen.reader.core.LocalNavigator.current
             if (d != null && d.drawable == null) {
-                app.lumen.reader.ui.glass.GlassIconButton(
-                    androidx.compose.material.icons.Icons.Rounded.Tune, "Edit photo", b,
+                app.lumen.reader.ui.components.AppIconButton(
+                    androidx.compose.material.icons.Icons.Rounded.Tune, "Edit photo",
                     { navigate(app.lumen.reader.core.Route.PhotoEdit(ref)) }
                 )
             }
@@ -243,3 +244,51 @@ private suspend fun decodeRegion(context: Context, ref: DocRef, d: Decoded, regi
             }
         }.getOrNull()
     }
+
+/** Swipe through the photos of a folder; each page zooms independently. */
+@Composable
+fun ImageGallery(images: List<DocRef>, start: DocRef, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val pager = androidx.compose.foundation.pager.rememberPagerState(
+        initialPage = images.indexOfFirst { it.key == start.key }.coerceAtLeast(0)
+    ) { images.size }
+    var chrome by rememberSaveable { mutableStateOf(true) }
+    val zooms = remember(images) { List(images.size) { ZoomState() } }
+    val current = images[pager.currentPage]
+    val bg by animateColorAsState(if (chrome) app.lumen.reader.ui.theme.Lumen.colors.backgroundAlt else Color.Black, label = "bg")
+    ViewerScaffold(
+        ref = current,
+        title = current.name,
+        subtitle = "${pager.currentPage + 1} of ${images.size}",
+        chromeVisible = chrome,
+        onBack = onBack,
+        actions = {
+            val navigate = app.lumen.reader.core.LocalNavigator.current
+            app.lumen.reader.ui.components.AppIconButton(
+                androidx.compose.material.icons.Icons.Rounded.Tune, "Edit photo",
+                { navigate(app.lumen.reader.core.Route.PhotoEdit(current)) }
+            )
+        }
+    ) { _ ->
+        androidx.compose.foundation.pager.HorizontalPager(
+            state = pager,
+            beyondViewportPageCount = 1,
+            userScrollEnabled = !zooms[pager.currentPage].isZoomed,
+            pageSpacing = 12.dp,
+            modifier = Modifier.fillMaxSize().background(bg)
+        ) { page ->
+            val ref = images[page]
+            var decoded by remember(ref) { mutableStateOf<Decoded?>(null) }
+            var error by remember(ref) { mutableStateOf<String?>(null) }
+            LaunchedEffect(ref) {
+                runCatching { decode(context, ref) }.onSuccess { decoded = it }.onFailure { error = it.message ?: "Unsupported image" }
+            }
+            val d = decoded
+            when {
+                error != null -> CenteredMessage("Couldn't open this image", error)
+                d == null -> LoadingIndicator()
+                else -> ZoomableImage(context, ref, d, zooms[page]) { chrome = !chrome }
+            }
+        }
+    }
+}

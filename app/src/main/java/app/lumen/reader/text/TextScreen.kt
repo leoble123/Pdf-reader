@@ -67,14 +67,13 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import app.lumen.reader.core.DocRef
 import app.lumen.reader.core.FileKind
 import app.lumen.reader.core.formatBytes
-import app.lumen.reader.ui.glass.GlassIconButton
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.AppIconButton
+import app.lumen.reader.ui.components.Panel
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.CenteredMessage
 import app.lumen.reader.viewer.LoadingIndicator
 import app.lumen.reader.viewer.TopBarHeight
 import app.lumen.reader.viewer.ViewerScaffold
-import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -187,19 +186,19 @@ private fun TextReader(ref: DocRef, doc: TextDoc, isCode: Boolean, onBack: () ->
         chromeVisible = chrome || searching,
         onBack = { if (searching) searching = false else onBack() },
         titleSlot = if (searching) {
-            { b ->
-                FindField(b, query, { query = it }, if (query.isEmpty()) null else if (matches.isEmpty()) "0" else "${active + 1}/${matches.size}")
+            {
+                FindField(query, { query = it }, if (query.isEmpty()) null else if (matches.isEmpty()) "0" else "${active + 1}/${matches.size}")
             }
         } else null,
-        actions = { b ->
+        actions = {
             if (searching) {
-                GlassIconButton(Icons.Rounded.KeyboardArrowUp, "Previous", b, { step(-1) })
-                GlassIconButton(Icons.Rounded.KeyboardArrowDown, "Next", b, { step(1) })
+                AppIconButton(Icons.Rounded.KeyboardArrowUp, "Previous", { step(-1) })
+                AppIconButton(Icons.Rounded.KeyboardArrowDown, "Next", { step(1) })
             } else {
-                if (onEdit != null) GlassIconButton(Icons.Rounded.Edit, "Edit", b, onEdit)
-                GlassIconButton(Icons.Rounded.Search, "Find", b, { searching = true })
-                GlassIconButton(
-                    Icons.AutoMirrored.Rounded.WrapText, "Wrap lines", b, { wrap = !wrap },
+                if (onEdit != null) AppIconButton(Icons.Rounded.Edit, "Edit", onEdit)
+                AppIconButton(Icons.Rounded.Search, "Find", { searching = true })
+                AppIconButton(
+                    Icons.AutoMirrored.Rounded.WrapText, "Wrap lines", { wrap = !wrap },
                     iconTint = if (wrap) colors.accent else Color.Unspecified
                 )
             }
@@ -350,12 +349,12 @@ private fun withMatches(
 }
 
 @Composable
-fun FindField(backdrop: Backdrop, query: String, onQuery: (String) -> Unit, status: String?) {
+fun FindField(query: String, onQuery: (String) -> Unit, status: String?) {
     val colors = Lumen.colors
     val type = Lumen.type
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
-    GlassPanel(backdrop, Modifier.height(TopBarHeight).fillMaxWidth()) {
+    Panel(Modifier.height(TopBarHeight).fillMaxWidth()) {
         Row(
             Modifier.fillMaxSize().padding(start = 18.dp, end = 14.dp),
             verticalAlignment = Alignment.CenterVertically,

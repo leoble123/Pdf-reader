@@ -31,6 +31,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.IntentCompat
 import app.lumen.reader.core.DocRef
+import app.lumen.reader.core.Folders
+import app.lumen.reader.core.LocalSettings
+import app.lumen.reader.core.Settings
+import app.lumen.reader.core.ThemeMode
+import androidx.compose.foundation.isSystemInDarkTheme
 import app.lumen.reader.core.LocalNavigator
 import app.lumen.reader.core.LocalPickers
 import app.lumen.reader.core.PendingResult
@@ -58,8 +63,20 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) handleIntent(intent)
         setContent {
-            LumenTheme {
-                LumenApp(pendingUris)
+            val settings = remember { Settings(this) }
+            val dark = when (settings.themeMode) {
+                ThemeMode.System -> isSystemInDarkTheme()
+                ThemeMode.Light -> false
+                ThemeMode.Dark -> true
+            }
+            LaunchedEffect(settings.keepScreenOn) {
+                if (settings.keepScreenOn) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            LumenTheme(dark = dark, dynamic = settings.dynamicColor, amoled = settings.amoled) {
+                CompositionLocalProvider(LocalSettings provides settings) {
+                    LumenApp(pendingUris)
+                }
             }
         }
     }
@@ -85,6 +102,10 @@ private fun LumenApp(pending: MutableList<Pair<Uri, String?>>) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val recents = remember { Recents(context) }
+    val folders = remember { Folders(context) }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) folders.add(uri)
+    }
     val stack = remember { mutableStateListOf<Route>() }
 
     fun open(uri: Uri, mime: String?, remember: Boolean = true) {
@@ -161,20 +182,35 @@ private fun LumenApp(pending: MutableList<Pair<Uri, String?>>) {
                 null -> HomeScreen(
                     recents = recents,
                     onPick = { group: PickGroup -> picker.launch(group.mimes) },
+                    folders = folders,
                     onOpen = { entry -> open(entry.ref.uri, entry.ref.mime) },
-                    onCreate = { route -> stack.add(route) }
+                    onCreate = { route -> stack.add(route) },
+                    onAddFolder = { folderPicker.launch(null) }
                 )
                 is Route.Doc -> DocumentViewer(
                     ref = route.ref,
+                    siblings = route.siblings,
                     recents = recents,
                     onBack = back,
                     onOpenNested = { nested -> stack.add(Route.Doc(nested)) }
                 )
-                is Route.PhotoEdit -> PhotoEditorScreen(route.ref, onBack = back)
-                is Route.VideoEdit -> VideoEditorScreen(route.refs, onBack = back)
+                // Editors are always dark (like pro photo/video tools) but keep the wallpaper accent.
+                is Route.PhotoEdit -> StudioTheme { PhotoEditorScreen(route.ref, onBack = back) }
+                is Route.VideoEdit -> StudioTheme { VideoEditorScreen(route.refs, onBack = back) }
+                is Route.Scanner -> app.lumen.reader.scan.ScannerScreen(onBack = back, onOpen = { ref -> recents.record(ref); stack[stack.lastIndex] = Route.Doc(ref) })
+                is Route.PdfTools -> app.lumen.reader.pdf.tools.PdfToolsScreen(route.refs, onBack = back, onOpen = { ref -> recents.record(ref); stack[stack.lastIndex] = Route.Doc(ref) })
+                is Route.Folder -> app.lumen.reader.files.FolderScreen(route, onBack = back, onOpenFile = { ref, siblings -> recents.record(ref); stack.add(Route.Doc(ref, siblings)) }, onOpenFolder = { stack.add(it) })
+                is Route.MediaTool -> app.lumen.reader.edit.video.MediaToolScreen(route, onBack = back)
+                is Route.Settings -> app.lumen.reader.ui.settings.SettingsScreen(onBack = back)
             }
         }
     }
+}
+
+@Composable
+private fun StudioTheme(content: @Composable () -> Unit) {
+    val settings = LocalSettings.current
+    LumenTheme(dark = true, dynamic = settings.dynamicColor, amoled = true, content = content)
 }
 
 private data class Screen(val depth: Int, val route: Route?)

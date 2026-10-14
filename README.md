@@ -1,10 +1,10 @@
 # Lumen
 
-A fast, offline file reader and editor for Android with a liquid-glass UI.
+A fast, offline file reader, editor and scanner for Android, built with Material You.
 
-Lumen opens PDFs and most other common files, lets you edit them, and includes a photo editor and a video editor. Everything is drawn on the device. The app has **no `INTERNET` permission**, so it can't send your files anywhere.
+Lumen opens PDFs and most other common files, lets you edit them, and includes a document scanner, PDF page tools, a photo editor and a video editor. Everything is drawn on the device. The app has **no `INTERNET` permission**, so it can't send your files anywhere.
 
-The floating bars, buttons and panels are real refracting glass, built with [Kyant's Backdrop / Liquid Glass](https://github.com/Kyant0/AndroidLiquidGlass) library (`io.github.kyant0:backdrop`).
+The UI is Material 3 with dynamic colour (it takes its palette from your wallpaper on Android 12+), with light, dark and pure-black themes.
 
 ## Supported formats
 
@@ -18,7 +18,7 @@ The floating bars, buttons and panels are real refracting glass, built with [Kya
 | Spreadsheets | `.xlsx` `.csv` `.tsv` | Canvas grid that stays smooth on large sheets; sheet tabs, dates, right-aligned numbers |
 | Code & text | 80+ extensions | Syntax highlighting, line numbers, find, word-wrap toggle, pinch to resize text, encoding detection |
 | Images | jpg png webp gif heic avif bmp… | Zoom up to 12×; very large photos load the visible area at full resolution; animated GIF/WebP |
-| Video & audio | mp4 mkv webm mov mp3 flac m4a ogg wav… | ExoPlayer with glass controls, scrubbing, ±10 s, playback speed, album art |
+| Video & audio | mp4 mkv webm mov mp3 flac m4a ogg wav… | ExoPlayer with Material controls, scrubbing, ±10 s, playback speed, album art |
 | Archives | `.zip` `.jar` `.apk` `.cbz`… | Browse folders and open any file inside |
 | Web / vector | `.html` `.svg` | Sandboxed WebView: no JavaScript, no network, no file access |
 | Anything else | | File details, a hex preview, and "open as text / archive / image" |
@@ -32,7 +32,27 @@ Edits are saved back to the original file when the app that provided it allows w
 | Text, code, Markdown | Full editor with live syntax highlighting, undo/redo, find & replace, line/column readout. Keeps the file's encoding, BOM and line endings |
 | CSV / Excel | Tap a cell to edit it, add rows. `.xlsx` saves are surgical: only the edited `<c>` cells are rewritten, so styles, other sheets, charts and formulas elsewhere survive |
 | Word (`.docx`) | Tap a paragraph to rewrite, delete, or add one below. Only touched paragraphs change; headings and list styles carry over. Paragraphs holding images or objects are read-only |
-| PDF | Markup mode: pen, highlighter, eraser and text notes in 8 colours, with undo/redo. Two fingers still zoom and pan while drawing. Marks are kept per document and reappear when you reopen it. *Export* writes an annotated copy. Android has no API for adding annotations to an existing PDF, so pages in the copy are rendered at 2× and the marks are drawn on top as vectors |
+| PDF | Markup mode: pen, highlighter, eraser and text notes in 8 colours, with undo/redo. Two fingers still zoom and pan while drawing. *Save* writes them into the PDF as real Ink and FreeText annotations through an incremental update. The original bytes stay untouched, so bookmarks and forms survive, and any PDF app can show, edit or remove the marks. Encrypted files fall back to a flattened copy |
+
+## PDF tools
+
+Lumen includes its own PDF engine (`pdf/engine`). It reads classic and compressed cross-references, object streams and hybrid files, and repairs damaged cross-reference tables. The page organiser uses it to merge PDFs, add images as pages, reorder, rotate, delete and extract pages. Pages are copied object-for-object, so text stays selectable and nothing gets re-rendered. Outputs pass qpdf's syntax check and pypdf in strict mode.
+
+## Scanner
+
+Photograph a page with the camera app or import photos. Lumen finds the page edges with Otsu thresholding and region growing, flattens the perspective, and cleans the page up:
+- *Enhance* removes shadows while keeping colour
+- *B&W* uses adaptive thresholding for crisp text
+- *Grayscale* is also available
+
+Pages save as a compact PDF that embeds the JPEGs directly. No camera permission and no ML model are needed.
+
+## More
+
+- **Folders:** add any folder through the system picker to browse it with sorting and filtering. Swipe between the photos in a folder.
+- **Compress video / extract audio:** re-encode to 480p, 720p or 1080p, or save the soundtrack as M4A.
+- **Read aloud:** reads documents with the phone's offline text-to-speech, scrolling along as it goes.
+- **Settings:** theme, dynamic colour, pure black, keep screen on.
 
 ## Photo editor
 
@@ -43,6 +63,8 @@ Crop (free, original, 1:1, 4:5, 9:16, 16:9, 3:2), rotate, flip, straighten. Expo
 A timeline in the style of mobile video apps: it scrolls under a fixed playhead, shows a filmstrip of each clip, and pinches to zoom. Mix videos and photos. Trim with handles, split at the playhead, duplicate, reorder, delete. Per-clip speed (0.25×–4×), volume or mute, and captions. Filters and colour adjustments for the whole edit, aspect ratio (9:16, 1:1, 4:5, 16:9), and a background music track that loops. Live preview uses Media3 `CompositionPlayer`. Export uses Media3 `Transformer` with the phone's hardware encoder (H.264, 480p–1440p) and saves to *Movies/Lumen*. Projects autosave and reopen where you left off.
 
 ## How it stays smooth
+
+* **Material without blur.** Bars and panels are plain tonal surfaces, so drawing them costs nothing per frame. A bundled baseline profile AOT-compiles the app and Compose at install, so the first launch is as fast as later ones.
 
 * **PDF zoom is a GPU layer transform.** Pinching doesn't re-measure, recompose or re-render anything. After the gesture ends, only the visible part of each page is re-rendered at full resolution (`PdfDoc.renderRegion`). Deep zoom stays sharp without allocating very large bitmaps.
 * **PDF rendering runs on one dedicated thread fed by a priority queue.** Visible pages go before prefetches. Among equal priorities the most recent request goes first, so a fast fling renders the page you stop on. Requests for pages that have already scrolled away are dropped. Each page shows a quick low-res preview first, then fades to full quality. The pages next to the current one are prefetched.
@@ -56,7 +78,7 @@ A timeline in the style of mobile video apps: it scrolls under a fixed playhead,
 ./gradlew :app:testDebugUnitTest    # parser/editor round-trip tests + JVM-rendered screenshots (app/build/screenshots)
 ```
 
-Requires JDK 21 and Android SDK 37. Minimum Android version: 8.0 (API 26). Real glass blur needs Android 12+ and refraction needs Android 13+. Older versions show a frosted fallback.
+Requires JDK 21 and Android SDK 37. Minimum Android version: 8.0 (API 26). Dynamic colour needs Android 12+; older versions use a built-in indigo palette.
 
 A prebuilt APK is in [`release/`](release/). It's signed with the debug key so it installs directly. Use your own signing config before publishing.
 
@@ -66,10 +88,14 @@ A prebuilt APK is in [`release/`](release/). It's signed with the debug key so i
 app/src/main/java/app/lumen/reader/
   core/      file detection, recents, thumbnails
   pdf/       PdfDoc (render engine), PdfViewer (zoom/pan list), PdfScreen
+  pdf/engine PDF object reader/writer, page assembler, incremental annotator
+  pdf/tools  page organiser
+  scan/      edge detection, perspective warp, scan filters, scanner UI
+  files/     folder browser
   rich/      one document model + renderer for Markdown/DOCX/PPTX/ODT/EPUB
   table/     CSV/XLSX parsing and the canvas grid
   text/      text loading, encoding detection, syntax highlighting
   image/ media/ archive/ viewer/   remaining viewers and shared chrome
   edit/      shared colour engine (Look), editor widgets, photo/ and video/ editors
-  ui/        theme, glass components, home screen
+  ui/        theme, Material components, home, settings
 ```

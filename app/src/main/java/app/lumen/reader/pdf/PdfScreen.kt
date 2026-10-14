@@ -72,6 +72,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import app.lumen.reader.core.DocRef
+import app.lumen.reader.core.Docs
+import androidx.compose.runtime.key
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import app.lumen.reader.core.LocalPickers
 import app.lumen.reader.core.Saver
 import app.lumen.reader.edit.PillButton
@@ -86,21 +90,20 @@ import androidx.compose.material.icons.rounded.BorderColor
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.Draw
+import androidx.compose.material.icons.rounded.ViewModule
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.ui.graphics.Color
 import app.lumen.reader.core.Recents
-import app.lumen.reader.ui.glass.GlassButton
-import app.lumen.reader.ui.glass.GlassIconButton
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.AppIconButton
+import app.lumen.reader.ui.components.Panel
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.BottomPill
 import app.lumen.reader.viewer.CenteredMessage
 import app.lumen.reader.viewer.LoadingIndicator
 import app.lumen.reader.viewer.TopBarHeight
 import app.lumen.reader.viewer.ViewerScaffold
-import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
@@ -117,9 +120,10 @@ private sealed interface PdfLoad {
 fun PdfScreen(ref: DocRef, recents: Recents, onBack: () -> Unit) {
     val context = LocalContext.current
     var password by remember { mutableStateOf<String?>(null) }
+    var reload by remember { mutableIntStateOf(0) }
     var load by remember { mutableStateOf<PdfLoad>(PdfLoad.Loading) }
 
-    LaunchedEffect(ref, password) {
+    LaunchedEffect(ref, password, reload) {
         load = PdfLoad.Loading
         load = try {
             PdfLoad.Ready(PdfDoc.open(context, ref, password))
@@ -135,7 +139,7 @@ fun PdfScreen(ref: DocRef, recents: Recents, onBack: () -> Unit) {
     }
 
     when (current) {
-        is PdfLoad.Ready -> PdfReader(ref, current.doc, recents, onBack)
+        is PdfLoad.Ready -> key(current.doc) { PdfReader(ref, current.doc, recents, onBack, onReload = { reload++ }) }
         else -> ViewerScaffold(ref, ref.name, "PDF", chromeVisible = true, onBack = onBack) {
             when (current) {
                 PdfLoad.Loading -> LoadingIndicator()
@@ -170,7 +174,7 @@ private fun PasswordPrompt(wrong: Boolean, onSubmit: (String) -> Unit) {
                 wrong -> "That password didn't work. Try again."
                 else -> "Enter the password to unlock this document."
             },
-            style = type.body.copy(color = if (wrong) colors.glow3 else colors.contentSecondary)
+            style = type.body.copy(color = if (wrong) androidx.compose.material3.MaterialTheme.colorScheme.error else colors.contentSecondary)
         )
         if (supported) {
             Spacer(Modifier.height(22.dp))
@@ -206,7 +210,7 @@ private fun PasswordPrompt(wrong: Boolean, onSubmit: (String) -> Unit) {
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 @Composable
-private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> Unit) {
+private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> Unit, onReload: () -> Unit) {
     val context = LocalContext.current
     val colors = Lumen.colors
     val type = Lumen.type
@@ -229,10 +233,36 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
     var note by remember { mutableStateOf<Triple<Int, Float, Float>?>(null) }
     var exportProgress by remember { mutableStateOf<Float?>(null) }
 
+    /**
+     * Writes the markup into the PDF as real annotations (incremental update, original bytes
+     * untouched). Encrypted or unparseable files fall back to a flattened copy.
+     */
     fun export() {
-        if (exportProgress != null) return
+        if (exportProgress != null || ink.isEmpty) return
         scope.launch {
             exportProgress = 0f
+            val bytes = runCatching {
+                withContext(Dispatchers.IO) {
+                    val original = Docs.open(context, ref).use { it.readBytes() }
+                    val reader = app.lumen.reader.pdf.engine.PdfReader(original)
+                    java.io.ByteArrayOutputStream().also { app.lumen.reader.pdf.engine.PdfAnnotator.save(reader, ink.pages.toMap(), it) }.toByteArray()
+                }
+            }.getOrNull()
+            if (bytes != null) {
+                exportProgress = null
+                val result = Saver.save(context, pickers, ref) { it.write(bytes) }
+                toast(context, result)
+                if (result is Saver.Result.Saved) {
+                    // The marks now live inside the PDF itself; reload so PDFium draws them.
+                    ink.discard()
+                    markup = false
+                    onReload()
+                } else if (result is Saver.Result.SavedCopy) {
+                    ink.discard()
+                    markup = false
+                }
+                return@launch
+            }
             val tmp = java.io.File(context.cacheDir, "export.pdf")
             val ok = runCatching { tmp.outputStream().use { exportFlattened(doc, ink, it) { p -> exportProgress = p } } }.isSuccess
             exportProgress = null
@@ -292,16 +322,25 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
 
     val pageLabel = "${state.currentPage + 1} / ${doc.pageCount}"
 
+    val navigate = app.lumen.reader.core.LocalNavigator.current
     ViewerScaffold(
         ref = ref,
         title = ref.name,
         subtitle = "PDF · ${doc.pageCount} pages",
+        menu = listOf(
+            app.lumen.reader.viewer.MenuAction("Organise pages", Icons.Rounded.ViewModule) {
+                navigate(app.lumen.reader.core.Route.PdfTools(listOf(ref)))
+            },
+            app.lumen.reader.viewer.MenuAction("Page colour: ${theme.label}", Icons.Rounded.Palette) {
+                theme = PageTheme.entries[(theme.ordinal + 1) % PageTheme.entries.size]
+            }
+        ),
         chromeVisible = chrome || searching || markup,
         onBack = { if (searching) searching = false else onBack() },
         titleSlot = if (searching) {
-            { backdrop ->
+            {
                 SearchField(
-                    backdrop, query, { query = it },
+                    query, { query = it },
                     status = when {
                         query.trim().length < 2 -> null
                         hitOrder.isEmpty() && searchProgress >= 1f -> "No results"
@@ -311,33 +350,30 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
                 )
             }
         } else null,
-        actions = { backdrop ->
+        actions = {
             if (markup) {
-                GlassIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", backdrop, { ink.undo() },
+                AppIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", { ink.undo() },
                     iconTint = if (ink.canUndo) Color.Unspecified else colors.contentTertiary)
-                GlassIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", backdrop, { ink.redo() },
+                AppIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", { ink.redo() },
                     iconTint = if (ink.canRedo) Color.Unspecified else colors.contentTertiary)
-                GlassIconButton(Icons.Rounded.SaveAlt, "Export annotated PDF", backdrop, ::export)
-                GlassIconButton(Icons.Rounded.Check, "Done", backdrop, { markup = false }, tint = colors.accent, iconTint = Color.White)
+                AppIconButton(Icons.Rounded.SaveAlt, "Save markup into PDF", ::export, enabled = !ink.isEmpty)
+                AppIconButton(Icons.Rounded.Check, "Done", { markup = false }, tint = colors.accent, iconTint = Color.White)
             } else if (searching) {
-                GlassIconButton(Icons.Rounded.KeyboardArrowUp, "Previous", backdrop, { stepHit(-1) })
-                GlassIconButton(Icons.Rounded.KeyboardArrowDown, "Next", backdrop, { stepHit(1) })
+                AppIconButton(Icons.Rounded.KeyboardArrowUp, "Previous", { stepHit(-1) })
+                AppIconButton(Icons.Rounded.KeyboardArrowDown, "Next", { stepHit(1) })
             } else {
                 if (doc.supportsText) {
-                    GlassIconButton(Icons.Rounded.Search, "Search", backdrop, { searching = true })
+                    AppIconButton(Icons.Rounded.Search, "Search", { searching = true })
                 }
-                GlassIconButton(Icons.Rounded.Draw, "Markup", backdrop, { markup = true; goTo = false })
-                GlassIconButton(Icons.Rounded.Palette, "Page color", backdrop, {
-                    theme = PageTheme.entries[(theme.ordinal + 1) % PageTheme.entries.size]
-                })
+                AppIconButton(Icons.Rounded.Draw, "Markup", { markup = true; goTo = false })
             }
         },
-        bottomBar = { backdrop ->
+        bottomBar = {
             if (markup) {
-                InkToolbar(backdrop, ink)
+                InkToolbar(ink)
                 return@ViewerScaffold
             }
-            BottomPill(backdrop, Modifier.clickable(interactionSource = null, indication = null) { goTo = !goTo }) {
+            BottomPill(Modifier.clickable(interactionSource = null, indication = null) { goTo = !goTo }) {
                 BasicText(
                     pageLabel,
                     style = type.label.copy(color = colors.content),
@@ -350,25 +386,25 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
                 )
             }
         },
-        overlay = { backdrop ->
+        overlay = {
             exportProgress?.let { p ->
-                GlassPanel(backdrop, Modifier.align(Alignment.Center).width(260.dp), cornerRadius = 26.dp) {
+                Panel(Modifier.align(Alignment.Center).width(260.dp), cornerRadius = 26.dp) {
                     Column(Modifier.padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         BasicText("Exporting… ${(p * 100).toInt()}%", style = type.headline.copy(color = colors.content))
                     }
                 }
             }
             note?.let { (page, x, y) ->
-                NotePanel(backdrop, onAdd = { text -> ink.addNote(page, x, y, text); note = null }, onCancel = { note = null })
+                NotePanel(onAdd = { text -> ink.addNote(page, x, y, text); note = null }, onCancel = { note = null })
             }
-            PageScrubber(backdrop, state, doc.pageCount, visible = chrome || state.isInteracting || state.listState.isScrollInProgress)
+            PageScrubber(state, doc.pageCount, visible = chrome || state.isInteracting || state.listState.isScrollInProgress)
             AnimatedVisibility(
                 goTo,
                 modifier = Modifier.align(Alignment.BottomCenter),
                 enter = fadeIn() + scaleIn(initialScale = 0.92f),
                 exit = fadeOut() + scaleOut(targetScale = 0.92f)
             ) {
-                GoToPanel(backdrop, state.currentPage, doc.pageCount) { page ->
+                GoToPanel(state.currentPage, doc.pageCount) { page ->
                     scope.launch { state.jumpTo(page) }
                 }
             }
@@ -400,9 +436,9 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
 }
 
 @Composable
-private fun InkToolbar(backdrop: Backdrop, ink: InkController) {
+private fun InkToolbar(ink: InkController) {
     val colors = Lumen.colors
-    GlassPanel(backdrop, Modifier.padding(horizontal = 12.dp).widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 28.dp) {
+    Panel(Modifier.padding(horizontal = 12.dp).widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 28.dp) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                 listOf(
@@ -455,15 +491,14 @@ private fun InkToolbar(backdrop: Backdrop, ink: InkController) {
 }
 
 @Composable
-private fun BoxScope.NotePanel(backdrop: Backdrop, onAdd: (String) -> Unit, onCancel: () -> Unit) {
+private fun BoxScope.NotePanel(onAdd: (String) -> Unit, onCancel: () -> Unit) {
     val colors = Lumen.colors
     val type = Lumen.type
     var text by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     androidx.activity.compose.BackHandler(onBack = onCancel)
-    GlassPanel(
-        backdrop,
+    Panel(
         Modifier.align(Alignment.BottomCenter).imePadding().padding(16.dp).widthIn(max = 520.dp).fillMaxWidth(),
         cornerRadius = 26.dp
     ) {
@@ -489,12 +524,12 @@ private fun BoxScope.NotePanel(backdrop: Backdrop, onAdd: (String) -> Unit, onCa
 }
 
 @Composable
-private fun SearchField(backdrop: Backdrop, query: String, onQuery: (String) -> Unit, status: String?) {
+private fun SearchField(query: String, onQuery: (String) -> Unit, status: String?) {
     val colors = Lumen.colors
     val type = Lumen.type
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
-    GlassPanel(backdrop, Modifier.height(TopBarHeight).fillMaxWidth()) {
+    Panel(Modifier.height(TopBarHeight).fillMaxWidth()) {
         Row(Modifier.fillMaxSize().padding(start = 18.dp, end = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) {
                 if (query.isEmpty()) {
@@ -525,7 +560,7 @@ private fun SearchField(backdrop: Backdrop, query: String, onQuery: (String) -> 
 }
 
 @Composable
-private fun BoxScope.PageScrubber(backdrop: Backdrop, state: PdfViewerState, pageCount: Int, visible: Boolean) {
+private fun BoxScope.PageScrubber(state: PdfViewerState, pageCount: Int, visible: Boolean) {
     if (pageCount < 3) return
     val colors = Lumen.colors
     val type = Lumen.type
@@ -564,7 +599,7 @@ private fun BoxScope.PageScrubber(backdrop: Backdrop, state: PdfViewerState, pag
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (dragging) {
-            GlassPanel(backdrop, Modifier.height(36.dp)) {
+            Panel(Modifier.height(36.dp)) {
                 BasicText(
                     "${page + 1}",
                     style = type.label.copy(color = colors.content),
@@ -599,19 +634,18 @@ private fun BoxScope.PageScrubber(backdrop: Backdrop, state: PdfViewerState, pag
                 },
             contentAlignment = Alignment.CenterEnd
         ) {
-            GlassPanel(backdrop, Modifier.size(width = 10.dp, height = thumbH)) {}
+            Panel(Modifier.size(width = 10.dp, height = thumbH)) {}
         }
     }
 }
 
 @Composable
-private fun GoToPanel(backdrop: Backdrop, current: Int, pageCount: Int, onGo: (Int) -> Unit) {
+private fun GoToPanel(current: Int, pageCount: Int, onGo: (Int) -> Unit) {
     val colors = Lumen.colors
     val type = Lumen.type
     var value by remember { mutableFloatStateOf(current.toFloat()) }
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    GlassPanel(
-        backdrop,
+    Panel(
         Modifier
             .padding(start = 16.dp, end = 16.dp, bottom = bottom + 78.dp)
             .widthIn(max = 520.dp)
@@ -624,64 +658,20 @@ private fun GoToPanel(backdrop: Backdrop, current: Int, pageCount: Int, onGo: (I
                 BasicText("${value.roundToInt() + 1}", style = type.title.copy(color = colors.content))
                 BasicText(" of $pageCount", style = type.headline.copy(color = colors.contentSecondary))
             }
-            GlassSlider(value, 0f, (pageCount - 1).toFloat(), onChange = {
-                value = it
-                onGo(it.roundToInt())
-            })
+            androidx.compose.material3.Slider(
+                value = value,
+                onValueChange = { value = it; onGo(it.roundToInt()) },
+                valueRange = 0f..(pageCount - 1).coerceAtLeast(1).toFloat()
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 listOf("First" to 0, "Middle" to pageCount / 2, "Last" to pageCount - 1).forEach { (label, p) ->
-                    GlassButton(backdrop, onClick = { value = p.toFloat(); onGo(p) }, height = 40.dp) {
-                        BasicText(label, style = type.label.copy(color = colors.content))
+                    androidx.compose.material3.FilledTonalButton(onClick = { value = p.toFloat(); onGo(p) }) {
+                        androidx.compose.material3.Text(label)
                     }
                 }
             }
         }
     }
-}
-
-@Composable
-private fun GlassSlider(value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
-    val colors = Lumen.colors
-    var width by remember { mutableFloatStateOf(1f) }
-    val f = if (max > min) (value - min) / (max - min) else 0f
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(32.dp)
-            .onSizeChangedCompat(horizontal = true) { width = it }
-            .pointerInput(min, max) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    fun emit(x: Float) = onChange(min + (x / width).coerceIn(0f, 1f) * (max - min))
-                    emit(down.position.x)
-                    while (true) {
-                        val e = awaitPointerEvent()
-                        val c = e.changes.firstOrNull() ?: break
-                        if (!c.pressed) break
-                        c.consume()
-                        emit(c.position.x)
-                    }
-                }
-            }
-            .drawBehind {
-                val h = 6.dp.toPx()
-                val y = size.height / 2
-                drawRoundRect(
-                    colors.hairline.copy(alpha = 0.35f),
-                    topLeft = androidx.compose.ui.geometry.Offset(0f, y - h / 2),
-                    size = androidx.compose.ui.geometry.Size(size.width, h),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(h / 2)
-                )
-                drawRoundRect(
-                    colors.accent,
-                    topLeft = androidx.compose.ui.geometry.Offset(0f, y - h / 2),
-                    size = androidx.compose.ui.geometry.Size(size.width * f, h),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(h / 2)
-                )
-                drawCircle(androidx.compose.ui.graphics.Color.White, 12.dp.toPx(), androidx.compose.ui.geometry.Offset(size.width * f, y))
-                drawCircle(colors.accent.copy(alpha = 0.25f), 12.dp.toPx(), androidx.compose.ui.geometry.Offset(size.width * f, y), style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
-            }
-    )
 }
 
 private fun Modifier.onSizeChangedCompat(horizontal: Boolean = false, block: (Float) -> Unit) =

@@ -44,10 +44,13 @@ class ScreenshotTest {
 
     private val pickers = app.lumen.reader.core.Pickers({ _, _ -> null }, { _, _ -> emptyList() })
 
-    private fun shoot(name: String, dark: Boolean = true, settleMs: Long = 2500, content: @Composable () -> Unit) {
+    private fun shoot(name: String, dark: Boolean = true, settleMs: Long = 2500, studio: Boolean = false, content: @Composable () -> Unit) {
         compose.setContent {
-            LumenTheme(dark = dark) {
-                androidx.compose.runtime.CompositionLocalProvider(app.lumen.reader.core.LocalPickers provides pickers) { content() }
+            LumenTheme(dark = dark || studio, amoled = studio) {
+                androidx.compose.runtime.CompositionLocalProvider(
+                    app.lumen.reader.core.LocalPickers provides pickers,
+                    app.lumen.reader.core.LocalSettings provides app.lumen.reader.core.Settings(ApplicationProvider.getApplicationContext())
+                ) { content() }
             }
         }
         var waited = 0L
@@ -72,22 +75,23 @@ class ScreenshotTest {
     @Test fun homeEmpty() {
         val recents = Recents(ApplicationProvider.getApplicationContext())
         recents.clear()
-        shoot("home_empty") { HomeScreen(recents, {}, {}) }
+        shoot("home_empty") { HomeScreen(recents, app.lumen.reader.core.Folders(ApplicationProvider.getApplicationContext()), {}, {}, {}, {}) }
     }
 
     @Test fun homeRecents() {
         val recents = Recents(ApplicationProvider.getApplicationContext())
         listOf("sample.pdf", "sample.docx", "sample.xlsx", "sample.epub", "sample.md", "sample.pptx").forEach { recents.record(fixture(it)) }
         recents.togglePin(fixture("sample.pdf"))
-        shoot("home_recents") { HomeScreen(recents, {}, {}) }
+        shoot("home_recents") { HomeScreen(recents, app.lumen.reader.core.Folders(ApplicationProvider.getApplicationContext()), {}, {}, {}, {}) }
     }
 
     @Test fun homeLight() {
         val recents = Recents(ApplicationProvider.getApplicationContext())
         listOf("sample.docx", "sample.md", "sample.csv").forEach { recents.record(fixture(it)) }
-        shoot("home_light", dark = false) { HomeScreen(recents, {}, {}) }
+        shoot("home_light", dark = false) { HomeScreen(recents, app.lumen.reader.core.Folders(ApplicationProvider.getApplicationContext()), {}, {}, {}, {}) }
     }
 
+    @Test fun settings() = shoot("settings", dark = false) { app.lumen.reader.ui.settings.SettingsScreen {} }
     @Test fun markdown() = viewer("sample.md")
     @Test fun markdownLight() = viewer("sample.md", dark = false)
     @Test fun docx() = viewer("sample.docx")
@@ -127,11 +131,30 @@ class ScreenshotTest {
     }
 
     @Test fun photoEditor() {
-        shoot("edit_photo", settleMs = 4000) { app.lumen.reader.edit.photo.PhotoEditorScreen(fixture("sample.jpg")) {} }
+        shoot("edit_photo", settleMs = 4000, studio = true) { app.lumen.reader.edit.photo.PhotoEditorScreen(fixture("sample.jpg")) {} }
     }
 
     @Test fun videoEditor() {
         val img = fixture("sample.jpg")
-        shoot("edit_video", settleMs = 4000) { app.lumen.reader.edit.video.VideoEditorScreen(listOf(img, img)) {} }
+        shoot("edit_video", settleMs = 4000, studio = true) { app.lumen.reader.edit.video.VideoEditorScreen(listOf(img, img)) {} }
+    }
+
+    @Test fun scannerEmpty() = shoot("scanner", dark = false) { app.lumen.reader.scan.ScannerScreen({}, {}) }
+
+    @Test fun pdfTools() = shoot("pdf_tools", dark = false) {
+        app.lumen.reader.pdf.tools.PdfToolsScreen(listOf(fixture("sample.pdf"), fixture("sample.jpg")), {}, {})
+    }
+
+    @Test fun mediaTool() {
+        val clip = fixture("sample.jpg").copy(name = "holiday.mp4", size = 48_000_000)
+        shoot("media_tool", dark = true) {
+            app.lumen.reader.edit.video.MediaToolScreen(app.lumen.reader.core.Route.MediaTool(app.lumen.reader.core.Route.MediaTool.Tool.Compress, clip)) {}
+        }
+    }
+
+    @Test fun homeDark() {
+        val recents = Recents(ApplicationProvider.getApplicationContext())
+        listOf("sample.pdf", "sample.docx", "sample.xlsx", "sample.epub").forEach { recents.record(fixture(it)) }
+        shoot("home_dark") { HomeScreen(recents, app.lumen.reader.core.Folders(ApplicationProvider.getApplicationContext()), {}, {}, {}, {}) }
     }
 }

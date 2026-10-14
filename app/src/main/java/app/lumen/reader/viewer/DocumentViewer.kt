@@ -10,6 +10,7 @@ import app.lumen.reader.archive.ZipScreen
 import app.lumen.reader.core.DocRef
 import app.lumen.reader.core.FileKind
 import app.lumen.reader.core.Recents
+import app.lumen.reader.image.ImageGallery
 import app.lumen.reader.image.ImageScreen
 import app.lumen.reader.media.MediaScreen
 import app.lumen.reader.pdf.PdfScreen
@@ -19,14 +20,17 @@ import app.lumen.reader.text.TextScreen
 
 /** Routes a document to the viewer best suited for it. */
 @Composable
-fun DocumentViewer(ref: DocRef, recents: Recents, onBack: () -> Unit, onOpenNested: (DocRef) -> Unit) {
+fun DocumentViewer(ref: DocRef, recents: Recents, onBack: () -> Unit, onOpenNested: (DocRef) -> Unit, siblings: List<DocRef> = emptyList()) {
     // "Open as…" from the fallback screen swaps the kind in place.
     var override by remember(ref) { mutableStateOf<DocRef?>(null) }
     val doc = override ?: ref
     key(doc.kind) {
         when (doc.kind) {
             FileKind.Pdf -> PdfScreen(doc, recents, onBack)
-            FileKind.Image -> ImageScreen(doc, onBack)
+            FileKind.Image -> {
+                val images = siblings.filter { it.kind == FileKind.Image }
+                if (images.size > 1 && images.any { it.key == doc.key }) ImageGallery(images, doc, onBack) else ImageScreen(doc, onBack)
+            }
             FileKind.Video, FileKind.Audio -> MediaScreen(doc, onBack)
             FileKind.Text, FileKind.Code -> TextScreen(doc, onBack)
             FileKind.Markdown, FileKind.Docx, FileKind.Pptx, FileKind.Odt, FileKind.Epub -> RichDocScreen(doc, recents, onBack)

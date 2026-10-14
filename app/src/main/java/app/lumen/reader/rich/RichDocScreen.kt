@@ -30,6 +30,8 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.RecordVoiceOver
+import androidx.compose.material.icons.rounded.StopCircle
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -58,15 +60,14 @@ import app.lumen.reader.core.FileKind
 import app.lumen.reader.core.Recents
 import app.lumen.reader.text.TextLoader
 import app.lumen.reader.text.TextScreen
-import app.lumen.reader.ui.glass.GlassIconButton
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.AppIconButton
+import app.lumen.reader.ui.components.Panel
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.BottomPill
 import app.lumen.reader.viewer.CenteredMessage
 import app.lumen.reader.viewer.LoadingIndicator
 import app.lumen.reader.viewer.TopBarHeight
 import app.lumen.reader.viewer.ViewerScaffold
-import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
@@ -154,6 +155,9 @@ private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Un
     var panel by remember { mutableStateOf<String?>(null) }
     val themes = readingThemes()
     val theme = themes[themeIndex.coerceIn(0, themes.lastIndex)]
+    val context = LocalContext.current
+    val speech = remember { app.lumen.reader.core.ReadAloud(context) }
+    DisposableEffect(speech) { onDispose { speech.shutdown() } }
 
     LaunchedEffect(Unit) {
         snapshotFlow { listState.firstVisibleItemIndex }.debounce(500).collect { recents.savePosition(ref, it) }
@@ -176,19 +180,29 @@ private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Un
         subtitle = doc.kindLabel + if (doc.title != null) " · ${ref.name}" else "",
         chromeVisible = chrome || panel != null,
         onBack = { if (panel != null) panel = null else onBack() },
-        actions = { b ->
+        actions = {
             if (doc.toc.size > 1) {
-                GlassIconButton(Icons.AutoMirrored.Rounded.FormatListBulleted, "Contents", b, {
+                AppIconButton(Icons.AutoMirrored.Rounded.FormatListBulleted, "Contents", {
                     panel = if (panel == "toc") null else "toc"
                 })
             }
-            GlassIconButton(Icons.Rounded.TextFields, "Reading options", b, {
+            AppIconButton(Icons.Rounded.TextFields, "Reading options", {
                 panel = if (panel == "aa") null else "aa"
             })
-            if (onEdit != null) GlassIconButton(Icons.Rounded.Edit, "Edit", b, onEdit)
+            AppIconButton(
+                if (speech.speaking) Icons.Rounded.StopCircle else Icons.Rounded.RecordVoiceOver,
+                if (speech.speaking) "Stop reading" else "Read aloud",
+                {
+                    if (speech.speaking) speech.stop()
+                    else speech.speak(doc.blocks.map { it.speakable() }, listState.firstVisibleItemIndex) { i ->
+                        scope.launch { listState.animateScrollToItem(i) }
+                    }
+                }
+            )
+            if (onEdit != null) AppIconButton(Icons.Rounded.Edit, "Edit", onEdit)
         },
-        bottomBar = { b ->
-            BottomPill(b) {
+        bottomBar = {
+            BottomPill {
                 Box(
                     Modifier
                         .padding(horizontal = 16.dp)
@@ -211,7 +225,7 @@ private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Un
                 )
             }
         },
-        overlay = { b ->
+        overlay = {
             val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
             if (panel != null) {
                 Box(Modifier.fillMaxSize().clickable(interactionSource = null, indication = null) { panel = null })
@@ -222,7 +236,7 @@ private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Un
                 enter = fadeIn() + scaleIn(initialScale = 0.9f, transformOrigin = TransformOrigin(1f, 0f)),
                 exit = fadeOut() + scaleOut(targetScale = 0.9f, transformOrigin = TransformOrigin(1f, 0f))
             ) {
-                TocPanel(b, doc) { index ->
+                TocPanel(doc) { index ->
                     panel = null
                     scope.launch { listState.animateScrollToItem(index) }
                 }
@@ -233,7 +247,7 @@ private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Un
                 enter = fadeIn() + scaleIn(initialScale = 0.9f, transformOrigin = TransformOrigin(1f, 0f)),
                 exit = fadeOut() + scaleOut(targetScale = 0.9f, transformOrigin = TransformOrigin(1f, 0f))
             ) {
-                ReadingPanel(b, themes, themeIndex, { themeIndex = it }, fontScale) { fontScale = it }
+                ReadingPanel(themes, themeIndex, { themeIndex = it }, fontScale) { fontScale = it }
             }
         }
     ) { padding ->
@@ -250,10 +264,10 @@ private fun Reader(ref: DocRef, doc: RichDoc, recents: Recents, onBack: () -> Un
 }
 
 @Composable
-private fun TocPanel(backdrop: Backdrop, doc: RichDoc, onJump: (Int) -> Unit) {
+private fun TocPanel(doc: RichDoc, onJump: (Int) -> Unit) {
     val colors = Lumen.colors
     val type = Lumen.type
-    GlassPanel(backdrop, Modifier.width(320.dp).heightIn(max = 460.dp), cornerRadius = 26.dp) {
+    Panel(Modifier.width(320.dp).heightIn(max = 460.dp), cornerRadius = 26.dp) {
         LazyColumn(Modifier.padding(vertical = 10.dp)) {
             item {
                 BasicText(
@@ -280,7 +294,6 @@ private fun TocPanel(backdrop: Backdrop, doc: RichDoc, onJump: (Int) -> Unit) {
 
 @Composable
 private fun ReadingPanel(
-    backdrop: Backdrop,
     themes: List<ReadingTheme>,
     selected: Int,
     onTheme: (Int) -> Unit,
@@ -289,7 +302,7 @@ private fun ReadingPanel(
 ) {
     val colors = Lumen.colors
     val type = Lumen.type
-    GlassPanel(backdrop, Modifier.width(280.dp), cornerRadius = 26.dp) {
+    Panel(Modifier.width(280.dp), cornerRadius = 26.dp) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 StepButton("A−") { onFontScale((fontScale - 0.1f).coerceAtLeast(0.7f)) }
@@ -338,4 +351,15 @@ private fun StepButton(label: String, onClick: () -> Unit) {
     ) {
         BasicText(label, style = Lumen.type.label.copy(color = colors.content))
     }
+}
+
+private fun Block.speakable(): String = when (this) {
+    is Block.Heading -> text.text
+    is Block.Paragraph -> text.text
+    is Block.ListItem -> text.text
+    is Block.Quote -> text.text
+    is Block.Section -> "Chapter $index. $title"
+    is Block.Slide -> listOfNotNull(title?.text).plus(body.map { it.speakable() }).joinToString(". ")
+    is Block.Table -> rows.joinToString(". ") { r -> r.joinToString(", ") { it.text } }
+    else -> ""
 }

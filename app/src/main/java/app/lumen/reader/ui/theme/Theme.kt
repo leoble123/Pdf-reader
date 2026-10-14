@@ -1,18 +1,32 @@
 package app.lumen.reader.ui.theme
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+/**
+ * Semantic colours used across Lumen. They're derived from the Material 3 colour scheme
+ * (wallpaper-based on Android 12+), so every screen follows Material You automatically.
+ */
 @Immutable
 data class LumenColors(
     val isDark: Boolean,
@@ -26,49 +40,51 @@ data class LumenColors(
     val hairline: Color,
     val accent: Color,
     val onAccent: Color,
-    val glassTint: Color,
-    val glassFallback: Color,
-    val glow1: Color,
-    val glow2: Color,
-    val glow3: Color
+    val accentContainer: Color,
+    val onAccentContainer: Color,
+    val tertiary: Color,
+    val bar: Color
 )
 
-val DarkColors = LumenColors(
-    isDark = true,
-    background = Color(0xFF0B0D14),
-    backgroundAlt = Color(0xFF12151F),
-    surface = Color(0xFF171A25),
-    surfaceStrong = Color(0xFF1F2330),
-    content = Color(0xFFF2F3F8),
-    contentSecondary = Color(0xFFB4B8C7),
-    contentTertiary = Color(0xFF7A7F91),
-    hairline = Color(0x1FFFFFFF),
-    accent = Color(0xFF8B7CFF),
-    onAccent = Color.White,
-    glassTint = Color(0xFF1A1D2A).copy(alpha = 0.38f),
-    glassFallback = Color(0xFF1C1F2C).copy(alpha = 0.92f),
-    glow1 = Color(0xFF5B6CFF),
-    glow2 = Color(0xFFB05CFF),
-    glow3 = Color(0xFFFF6F91)
+private fun ColorScheme.toLumen(dark: Boolean) = LumenColors(
+    isDark = dark,
+    background = surface,
+    backgroundAlt = surfaceContainerLow,
+    surface = surfaceContainerHigh,
+    surfaceStrong = surfaceContainerHighest,
+    content = onSurface,
+    contentSecondary = onSurfaceVariant,
+    contentTertiary = outline,
+    hairline = outlineVariant,
+    accent = primary,
+    onAccent = onPrimary,
+    accentContainer = primaryContainer,
+    onAccentContainer = onPrimaryContainer,
+    tertiary = tertiary,
+    bar = surfaceContainer
 )
 
-val LightColors = LumenColors(
-    isDark = false,
-    background = Color(0xFFF4F5FA),
-    backgroundAlt = Color(0xFFEAECF4),
-    surface = Color(0xFFFFFFFF),
-    surfaceStrong = Color(0xFFF0F1F7),
-    content = Color(0xFF12141C),
-    contentSecondary = Color(0xFF4A4F60),
-    contentTertiary = Color(0xFF8A8FA0),
-    hairline = Color(0x14000000),
-    accent = Color(0xFF6A58FF),
-    onAccent = Color.White,
-    glassTint = Color.White.copy(alpha = 0.42f),
-    glassFallback = Color.White.copy(alpha = 0.94f),
-    glow1 = Color(0xFF7D8BFF),
-    glow2 = Color(0xFFC48BFF),
-    glow3 = Color(0xFFFF9DB5)
+// Fallback palette for Android 11 and below (no wallpaper colours): a calm indigo.
+private val LightFallback = lightColorScheme(
+    primary = Color(0xFF4F5BD5), onPrimary = Color.White,
+    primaryContainer = Color(0xFFDFE0FF), onPrimaryContainer = Color(0xFF0B1360),
+    secondary = Color(0xFF5B5D72), secondaryContainer = Color(0xFFE0E0F9), onSecondaryContainer = Color(0xFF181A2C),
+    tertiary = Color(0xFF77536D), tertiaryContainer = Color(0xFFFFD7F1), onTertiaryContainer = Color(0xFF2D1228),
+    surface = Color(0xFFFBF8FF), onSurface = Color(0xFF1B1B21), onSurfaceVariant = Color(0xFF46464F),
+    surfaceContainerLowest = Color.White, surfaceContainerLow = Color(0xFFF5F2FA), surfaceContainer = Color(0xFFEFEDF4),
+    surfaceContainerHigh = Color(0xFFE9E7EF), surfaceContainerHighest = Color(0xFFE4E1E9),
+    outline = Color(0xFF777680), outlineVariant = Color(0xFFC7C5D0)
+)
+
+private val DarkFallback = darkColorScheme(
+    primary = Color(0xFFBCC2FF), onPrimary = Color(0xFF1F2A8E),
+    primaryContainer = Color(0xFF3742BC), onPrimaryContainer = Color(0xFFDFE0FF),
+    secondary = Color(0xFFC4C4DD), secondaryContainer = Color(0xFF434559), onSecondaryContainer = Color(0xFFE0E0F9),
+    tertiary = Color(0xFFE6BAD7), tertiaryContainer = Color(0xFF5D3C55), onTertiaryContainer = Color(0xFFFFD7F1),
+    surface = Color(0xFF131318), onSurface = Color(0xFFE4E1E9), onSurfaceVariant = Color(0xFFC7C5D0),
+    surfaceContainerLowest = Color(0xFF0E0E13), surfaceContainerLow = Color(0xFF1B1B21), surfaceContainer = Color(0xFF1F1F25),
+    surfaceContainerHigh = Color(0xFF2A292F), surfaceContainerHighest = Color(0xFF35343A),
+    outline = Color(0xFF91909A), outlineVariant = Color(0xFF46464F)
 )
 
 @Immutable
@@ -82,18 +98,18 @@ data class LumenType(
     val mono: TextStyle
 )
 
-private val Type = LumenType(
-    display = TextStyle(fontSize = 34.sp, lineHeight = 40.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.6).sp),
-    title = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),
-    headline = TextStyle(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold),
-    body = TextStyle(fontSize = 15.sp, lineHeight = 22.sp),
-    label = TextStyle(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
-    caption = TextStyle(fontSize = 12.sp, lineHeight = 16.sp),
-    mono = TextStyle(fontSize = 13.sp, lineHeight = 19.sp, fontFamily = FontFamily.Monospace)
+private fun Typography.toLumen() = LumenType(
+    display = displaySmall.copy(fontWeight = FontWeight.SemiBold),
+    title = titleLarge,
+    headline = titleMedium,
+    body = bodyLarge.copy(fontSize = 15.sp, lineHeight = 22.sp),
+    label = labelLarge,
+    caption = bodySmall,
+    mono = bodyMedium.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp)
 )
 
-val LocalLumenColors = staticCompositionLocalOf { DarkColors }
-val LocalLumenType = staticCompositionLocalOf { Type }
+val LocalLumenColors = staticCompositionLocalOf { DarkFallback.toLumen(true) }
+val LocalLumenType = staticCompositionLocalOf { Typography().toLumen() }
 
 object Lumen {
     val colors: LumenColors @Composable get() = LocalLumenColors.current
@@ -101,12 +117,30 @@ object Lumen {
 }
 
 @Composable
-fun LumenTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colors = if (dark) DarkColors else LightColors
-    CompositionLocalProvider(
-        LocalLumenColors provides colors,
-        LocalLumenType provides Type,
-        LocalTextSelectionColors provides TextSelectionColors(colors.accent, colors.accent.copy(alpha = 0.3f)),
-        content = content
-    )
+fun LumenTheme(
+    dark: Boolean = isSystemInDarkTheme(),
+    dynamic: Boolean = true,
+    amoled: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    val context = LocalContext.current
+    val base = when {
+        dynamic && Build.VERSION.SDK_INT >= 31 -> if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        dark -> DarkFallback
+        else -> LightFallback
+    }
+    val scheme = if (dark && amoled) base.copy(
+        surface = Color.Black, background = Color.Black,
+        surfaceContainerLowest = Color.Black, surfaceContainerLow = Color(0xFF080808), surfaceContainer = Color(0xFF101010)
+    ) else base
+    val typography = remember { Typography() }
+    val lumenColors = remember(scheme, dark) { scheme.toLumen(dark) }
+    MaterialTheme(colorScheme = scheme, typography = typography) {
+        CompositionLocalProvider(
+            LocalLumenColors provides lumenColors,
+            LocalLumenType provides remember(typography) { typography.toLumen() },
+            LocalTextSelectionColors provides TextSelectionColors(scheme.primary, scheme.primary.copy(alpha = 0.3f)),
+            content = content
+        )
+    }
 }

@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Audiotrack
+import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.VideoSettings
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Pause
@@ -69,11 +70,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import app.lumen.reader.core.DocRef
 import app.lumen.reader.core.FileKind
-import app.lumen.reader.ui.glass.GlassIconButton
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.AppIconButton
+import app.lumen.reader.ui.components.Panel
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.ViewerScaffold
-import com.kyant.backdrop.Backdrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -160,22 +160,31 @@ fun MediaScreen(ref: DocRef, onBack: () -> Unit) {
 
     val colors = Lumen.colors
     val type = Lumen.type
+    val navigateTool = app.lumen.reader.core.LocalNavigator.current
     ViewerScaffold(
         ref = ref,
         title = info?.title ?: ref.name,
         subtitle = if (isVideo) "Video" else listOfNotNull(info?.artist, info?.album).joinToString(" · ").ifEmpty { "Audio" },
         chromeVisible = chrome || !isVideo || !playing,
         onBack = onBack,
-        actions = { b ->
+        menu = if (isVideo) listOf(
+            app.lumen.reader.viewer.MenuAction("Compress video", Icons.Rounded.Compress) {
+                player.pause(); navigateTool(app.lumen.reader.core.Route.MediaTool(app.lumen.reader.core.Route.MediaTool.Tool.Compress, ref))
+            },
+            app.lumen.reader.viewer.MenuAction("Extract audio", Icons.Rounded.Audiotrack) {
+                player.pause(); navigateTool(app.lumen.reader.core.Route.MediaTool(app.lumen.reader.core.Route.MediaTool.Tool.ExtractAudio, ref))
+            }
+        ) else emptyList(),
+        actions = {
             val navigate = app.lumen.reader.core.LocalNavigator.current
-            if (isVideo) GlassIconButton(Icons.Rounded.VideoSettings, "Edit video", b, {
+            if (isVideo) AppIconButton(Icons.Rounded.VideoSettings, "Edit video", {
                 player.pause()
                 navigate(app.lumen.reader.core.Route.VideoEdit(listOf(ref)))
             })
         },
-        bottomBar = { b ->
+        bottomBar = {
             Controls(
-                b, playing, position, duration, speeds[speedIndex],
+                playing, position, duration, speeds[speedIndex],
                 onToggle = { if (player.isPlaying) player.pause() else { if (player.playbackState == Player.STATE_ENDED) player.seekTo(0); player.play() } },
                 onSeek = { player.seekTo(it); position = it },
                 onSkip = { player.seekTo((player.currentPosition + it).coerceIn(0, duration)) },
@@ -265,7 +274,6 @@ private fun AudioArt(info: TrackInfo?, accent: Color) {
 
 @Composable
 private fun Controls(
-    backdrop: Backdrop,
     playing: Boolean,
     position: Long,
     duration: Long,
@@ -279,8 +287,7 @@ private fun Controls(
     val type = Lumen.type
     var scrub by remember { mutableFloatStateOf(-1f) }
     val fraction = if (scrub >= 0) scrub else if (duration > 0) position.toFloat() / duration else 0f
-    GlassPanel(
-        backdrop,
+    Panel(
         Modifier.padding(horizontal = 16.dp).widthIn(max = 560.dp).fillMaxWidth(),
         cornerRadius = 30.dp
     ) {
@@ -326,13 +333,13 @@ private fun Controls(
                     style = type.label.copy(color = colors.content),
                     modifier = Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onSpeed).padding(horizontal = 12.dp, vertical = 10.dp)
                 )
-                GlassIconButton(Icons.Rounded.Replay10, "Back 10 seconds", backdrop, { onSkip(-10_000) })
-                GlassIconButton(
+                AppIconButton(Icons.Rounded.Replay10, "Back 10 seconds", { onSkip(-10_000) })
+                AppIconButton(
                     if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                     if (playing) "Pause" else "Play",
-                    backdrop, onToggle, size = 62.dp, tint = colors.accent, iconTint = Color.White
+                    onToggle, size = 62.dp, tint = colors.accent, iconTint = Color.White
                 )
-                GlassIconButton(Icons.Rounded.Forward10, "Forward 10 seconds", backdrop, { onSkip(10_000) })
+                AppIconButton(Icons.Rounded.Forward10, "Forward 10 seconds", { onSkip(10_000) })
                 Spacer(Modifier.size(width = 48.dp, height = 1.dp))
             }
         }

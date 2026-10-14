@@ -59,8 +59,8 @@ import app.lumen.reader.core.Saver
 import app.lumen.reader.edit.PillButton
 import app.lumen.reader.edit.UnsavedChangesPanel
 import app.lumen.reader.edit.toast
-import app.lumen.reader.ui.glass.GlassIconButton
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.AppIconButton
+import app.lumen.reader.ui.components.Panel
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.BottomPill
 import app.lumen.reader.viewer.TopBarHeight
@@ -141,16 +141,16 @@ fun TextEditor(
         subtitle = if (dirty) "Edited · not saved" else "Editing",
         chromeVisible = true,
         onBack = ::exit,
-        actions = { b ->
-            GlassIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", b, { state.undoState.undo() },
+        actions = {
+            AppIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", { state.undoState.undo() },
                 iconTint = if (state.undoState.canUndo) Color.Unspecified else colors.contentTertiary)
-            GlassIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", b, { state.undoState.redo() },
+            AppIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", { state.undoState.redo() },
                 iconTint = if (state.undoState.canRedo) Color.Unspecified else colors.contentTertiary)
-            GlassIconButton(Icons.Rounded.FindReplace, "Find and replace", b, { findOpen = !findOpen })
-            GlassIconButton(Icons.Rounded.Check, "Save", b, { save(false) }, tint = colors.accent, iconTint = Color.White)
+            AppIconButton(Icons.Rounded.FindReplace, "Find and replace", { findOpen = !findOpen })
+            AppIconButton(Icons.Rounded.Check, "Save", { save(false) }, tint = colors.accent, iconTint = Color.White)
         },
-        bottomBar = { b ->
-            BottomPill(b) {
+        bottomBar = {
+            BottomPill {
                 BasicText(
                     "Ln ${cursor.first}, Col ${cursor.second}",
                     style = type.label.copy(color = colors.content),
@@ -163,7 +163,7 @@ fun TextEditor(
                 )
             }
         },
-        overlay = { b ->
+        overlay = {
             val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
             AnimatedVisibility(
                 findOpen,
@@ -171,12 +171,12 @@ fun TextEditor(
                 enter = fadeIn() + slideInVertically { -it / 3 },
                 exit = fadeOut() + slideOutVertically { -it / 3 }
             ) {
-                GlassPanel(b, Modifier.widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 26.dp) {
+                Panel(Modifier.widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 26.dp) {
                     FindReplace(state)
                 }
             }
             UnsavedChangesPanel(
-                b, confirmExit,
+                confirmExit,
                 onSave = { confirmExit = false; save(true) },
                 onDiscard = { confirmExit = false; onClose(everSaved) },
                 onCancel = { confirmExit = false }

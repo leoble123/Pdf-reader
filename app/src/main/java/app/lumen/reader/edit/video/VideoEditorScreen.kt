@@ -113,11 +113,9 @@ import app.lumen.reader.edit.StudioSlider
 import app.lumen.reader.edit.ToolTab
 import app.lumen.reader.edit.UnsavedChangesPanel
 import app.lumen.reader.edit.toast
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.Panel
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.LoadingIndicator
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
@@ -346,13 +344,11 @@ private fun VideoEditor(start: VideoProject, onBack: () -> Unit) {
             else -> exit()
         }
     }
-
-    val backdrop = rememberLayerBackdrop()
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     Box(Modifier.fillMaxSize().background(Studio.background)) {
-        Column(Modifier.fillMaxSize().layerBackdrop(backdrop).background(Studio.background).padding(top = top + 64.dp, bottom = bottom)) {
+        Column(Modifier.fillMaxSize().background(Studio.background).padding(top = top + 64.dp, bottom = bottom)) {
             // Preview
             Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
                 Box(
@@ -434,8 +430,7 @@ private fun VideoEditor(start: VideoProject, onBack: () -> Unit) {
         }
 
         // Tools
-        GlassPanel(
-            backdrop,
+        Panel(
             Modifier
                 .align(Alignment.BottomCenter)
                 .padding(start = 10.dp, end = 10.dp, bottom = bottom + 10.dp)
@@ -517,7 +512,7 @@ private fun VideoEditor(start: VideoProject, onBack: () -> Unit) {
 
         exportProgress?.let { p ->
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)).clickable(interactionSource = null, indication = null) {})
-            GlassPanel(backdrop, Modifier.align(Alignment.Center).width(260.dp), cornerRadius = 28.dp) {
+            Panel(Modifier.align(Alignment.Center).width(260.dp), cornerRadius = 28.dp) {
                 Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     BasicText("Exporting $p%", style = type.title.copy(color = Studio.text))
                     Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(Studio.track)) {
@@ -532,7 +527,7 @@ private fun VideoEditor(start: VideoProject, onBack: () -> Unit) {
             }
         }
         UnsavedChangesPanel(
-            backdrop, confirmExit,
+            confirmExit,
             onSave = { confirmExit = false; panel = Panel.Export },
             onDiscard = {
                 confirmExit = false

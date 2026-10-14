@@ -97,11 +97,9 @@ import app.lumen.reader.edit.StudioSlider
 import app.lumen.reader.edit.ToolTab
 import app.lumen.reader.edit.UnsavedChangesPanel
 import app.lumen.reader.edit.toast
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.Panel
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.LoadingIndicator
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -217,8 +215,6 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
     BackHandler(!confirmExit) {
         if (selectedText != null) selectedText = null else exit()
     }
-
-    val backdrop = rememberLayerBackdrop()
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
@@ -226,7 +222,7 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
         Box(
             Modifier
                 .fillMaxSize()
-                .layerBackdrop(backdrop)
+                
                 .background(Studio.background)
                 .padding(top = top + 72.dp, bottom = bottom + 200.dp, start = 12.dp, end = 12.dp)
         ) {
@@ -278,8 +274,7 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
         }
 
         // Tool panel + tabs
-        GlassPanel(
-            backdrop,
+        Panel(
             Modifier
                 .align(Alignment.BottomCenter)
                 .padding(start = 10.dp, end = 10.dp, bottom = bottom + 10.dp)
@@ -325,7 +320,7 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
 
         if (saving) {
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)).clickable(interactionSource = null, indication = null) {})
-            GlassPanel(backdrop, Modifier.align(Alignment.Center).width(220.dp), cornerRadius = 26.dp) {
+            Panel(Modifier.align(Alignment.Center).width(220.dp), cornerRadius = 26.dp) {
                 Column(Modifier.padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.size(40.dp)) { LoadingIndicator() }
                     BasicText("Rendering full resolution…", style = type.label.copy(color = Studio.text), modifier = Modifier.padding(top = 12.dp))
@@ -333,7 +328,7 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
             }
         }
         UnsavedChangesPanel(
-            backdrop, confirmExit,
+            confirmExit,
             onSave = { confirmExit = false; export(true) },
             onDiscard = { confirmExit = false; onBack() },
             onCancel = { confirmExit = false }
@@ -393,6 +388,7 @@ private fun PhotoCanvas(
 ) {
     val image = remember(proxy) { proxy.asImageBitmap() }
     val cropping = tool == Tool.Crop
+    val accent = Studio.accent
     val density = LocalDensity.current
     val shader = remember { if (Look.supportsShader) RuntimeShader(Look.SHADER) else null }
     var liveStroke by remember { mutableStateOf<FloatArray?>(null) }
@@ -507,7 +503,7 @@ private fun PhotoCanvas(
                     val hw = t.size * ref * (0.35f * t.text.lines().maxOf { it.length }.coerceAtLeast(2))
                     val hh = t.size * ref * 0.75f * t.text.lines().size
                     drawRoundRect(
-                        Studio.accent,
+                        accent,
                         Offset(t.x * size.width - hw, t.y * size.height - hh),
                         Size(hw * 2, hh * 2),
                         androidx.compose.ui.geometry.CornerRadius(8.dp.toPx()),

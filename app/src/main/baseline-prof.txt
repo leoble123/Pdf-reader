@@ -1,0 +1,10 @@
+# Startup/scroll profile: AOT-compile Lumen and the Compose code paths it leans on,
+# so the first launch is as fast as later ones (installed by androidx.profileinstaller).
+HSPLapp/lumen/reader/**->**(**)**
+Lapp/lumen/reader/**;
+HSPLandroidx/compose/runtime/**->**(**)**
+HSPLandroidx/compose/ui/**->**(**)**
+HSPLandroidx/compose/foundation/**->**(**)**
+HSPLandroidx/compose/material3/**->**(**)**
+HSPLandroidx/compose/animation/**->**(**)**
+HSPLkotlinx/coroutines/**->**(**)**

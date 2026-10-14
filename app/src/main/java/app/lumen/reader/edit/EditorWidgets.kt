@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -44,12 +45,12 @@ import kotlin.math.abs
 
 /** Studio palette: editors stay dark regardless of system theme, like pro tools do. */
 object Studio {
-    val background = Color(0xFF07080C)
-    val panel = Color(0xFF14161E)
-    val text = Color(0xFFF2F3F8)
-    val textDim = Color(0xFF8C91A3)
-    val accent = Color(0xFF8B7CFF)
-    val track = Color(0x33FFFFFF)
+    val background: Color @Composable get() = MaterialTheme.colorScheme.surfaceContainerLowest
+    val panel: Color @Composable get() = MaterialTheme.colorScheme.surfaceContainerHigh
+    val text: Color @Composable get() = MaterialTheme.colorScheme.onSurface
+    val textDim: Color @Composable get() = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent: Color @Composable get() = MaterialTheme.colorScheme.primary
+    val track: Color @Composable get() = MaterialTheme.colorScheme.surfaceContainerHighest
 
     val swatches = listOf(
         0xFFFFFFFF, 0xFF000000, 0xFFFF453A, 0xFFFF9F0A, 0xFFFFD60A, 0xFF32D74B,
@@ -75,6 +76,10 @@ fun StudioSlider(
     var width by remember { mutableFloatStateOf(1f) }
     val current by rememberUpdatedState(value)
     val fraction = ((value - min) / (max - min)).coerceIn(0f, 1f)
+    val track = Studio.track
+    val accent = Studio.accent
+    val dim = Studio.textDim
+    val thumb = MaterialTheme.colorScheme.primary
     Box(
         modifier
             .fillMaxWidth()
@@ -117,17 +122,17 @@ fun StudioSlider(
             .drawBehind {
                 val h = 4.dp.toPx()
                 val y = size.height / 2
-                drawRoundRect(Studio.track, Offset(0f, y - h / 2), Size(size.width, h), CornerRadius(h / 2))
+                drawRoundRect(track, Offset(0f, y - h / 2), Size(size.width, h), CornerRadius(h / 2))
                 val start = if (center != null) ((center - min) / (max - min)) * size.width else 0f
                 val end = fraction * size.width
                 drawRoundRect(
-                    Studio.accent,
+                    accent,
                     Offset(minOf(start, end), y - h / 2),
                     Size(abs(end - start), h),
                     CornerRadius(h / 2)
                 )
-                if (center != null) drawCircle(Studio.textDim, 2.5.dp.toPx(), Offset(start, y + 10.dp.toPx()))
-                drawCircle(Color.White, 10.dp.toPx(), Offset(end, y))
+                if (center != null) drawCircle(dim, 2.5.dp.toPx(), Offset(start, y + 10.dp.toPx()))
+                drawCircle(thumb, 10.dp.toPx(), Offset(end, y))
             }
     )
 }
@@ -148,18 +153,12 @@ fun ToolTab(icon: ImageVector, label: String, selected: Boolean, onClick: () -> 
 
 @Composable
 fun Chip(label: String, selected: Boolean, onClick: () -> Unit, dot: Boolean = false) {
-    Row(
-        Modifier
-            .clip(CircleShape)
-            .background(if (selected) Studio.accent else Color.White.copy(alpha = 0.08f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        BasicText(label, style = Lumen.type.label.copy(color = Studio.text))
-        if (dot) Box(Modifier.size(5.dp).clip(CircleShape).background(if (selected) Color.White else Studio.accent))
-    }
+    androidx.compose.material3.FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { androidx.compose.material3.Text(label) },
+        trailingIcon = if (dot && !selected) ({ Box(Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)) }) else null
+    )
 }
 
 @Composable

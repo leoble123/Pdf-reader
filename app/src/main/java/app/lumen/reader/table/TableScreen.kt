@@ -53,8 +53,8 @@ import app.lumen.reader.core.Saver
 import app.lumen.reader.edit.PillButton
 import app.lumen.reader.edit.UnsavedChangesPanel
 import app.lumen.reader.edit.toast
-import app.lumen.reader.ui.glass.GlassIconButton
-import app.lumen.reader.ui.glass.GlassPanel
+import app.lumen.reader.ui.components.AppIconButton
+import app.lumen.reader.ui.components.Panel
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -198,10 +198,10 @@ private fun TableReader(ref: DocRef, book: Workbook, onBack: () -> Unit) {
         subtitle = (if (dirty) "Edited · " else "") + "${"%,d".format(sheet.rows.size)} rows × ${sheet.columns} columns" + if (book.truncated) " · truncated" else "",
         chromeVisible = chrome || editing,
         onBack = ::exit,
-        actions = { b ->
+        actions = {
             if (canEdit) {
                 if (editing) {
-                    GlassIconButton(Icons.Rounded.Add, "Add row", b, {
+                    AppIconButton(Icons.Rounded.Add, "Add row", {
                         commitCell()
                         sheet.addRow()
                         selected = sheet.rows.lastIndex to 0
@@ -209,13 +209,13 @@ private fun TableReader(ref: DocRef, book: Workbook, onBack: () -> Unit) {
                         dirty = true
                         version++
                     })
-                    GlassIconButton(Icons.Rounded.Check, "Save", b, { save(false) }, tint = colors.accent, iconTint = Color.White)
+                    AppIconButton(Icons.Rounded.Check, "Save", { save(false) }, tint = colors.accent, iconTint = Color.White)
                 } else {
-                    GlassIconButton(Icons.Rounded.Edit, "Edit", b, { editing = true })
+                    AppIconButton(Icons.Rounded.Edit, "Edit", { editing = true })
                 }
             }
         },
-        overlay = { b ->
+        overlay = {
             val sel = selected
             AnimatedVisibility(
                 editing && sel != null,
@@ -223,19 +223,19 @@ private fun TableReader(ref: DocRef, book: Workbook, onBack: () -> Unit) {
                 enter = fadeIn() + slideInVertically { it / 2 },
                 exit = fadeOut() + slideOutVertically { it / 2 }
             ) {
-                if (sel != null) CellEditor(b, XlsxWriter.columnName(sel.second) + (sel.first + 1), cellText) {
+                if (sel != null) CellEditor(XlsxWriter.columnName(sel.second) + (sel.first + 1), cellText) {
                     commitCell(); selected = null
                 }
             }
             UnsavedChangesPanel(
-                b, confirmExit,
+                confirmExit,
                 onSave = { confirmExit = false; save(true) },
                 onDiscard = { confirmExit = false; onBack() },
                 onCancel = { confirmExit = false }
             )
         },
-        bottomBar = { b ->
-            BottomPill(b) {
+        bottomBar = {
+            BottomPill {
                 if (book.sheets.size > 1) {
                     Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp)) {
                         book.sheets.forEachIndexed { i, s ->
@@ -278,12 +278,12 @@ private fun TableReader(ref: DocRef, book: Workbook, onBack: () -> Unit) {
 }
 
 @Composable
-private fun CellEditor(backdrop: com.kyant.backdrop.Backdrop, label: String, state: TextFieldState, onDone: () -> Unit) {
+private fun CellEditor(label: String, state: TextFieldState, onDone: () -> Unit) {
     val colors = Lumen.colors
     val type = Lumen.type
     val focus = remember { FocusRequester() }
     LaunchedEffect(label) { focus.requestFocus() }
-    GlassPanel(backdrop, Modifier.widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 24.dp) {
+    Panel(Modifier.widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 24.dp) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             BasicText(
                 label,
