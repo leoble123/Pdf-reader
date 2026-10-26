@@ -32,7 +32,20 @@ Edits are saved back to the original file when the app that provided it allows w
 | Text, code, Markdown | Full editor with live syntax highlighting, undo/redo, find & replace, line/column readout. Keeps the file's encoding, BOM and line endings |
 | CSV / Excel | Tap a cell to edit it, add rows. `.xlsx` saves are surgical: only the edited `<c>` cells are rewritten, so styles, other sheets, charts and formulas elsewhere survive |
 | Word (`.docx`) | Tap a paragraph to rewrite, delete, or add one below. Only touched paragraphs change; headings and list styles carry over. Paragraphs holding images or objects are read-only |
-| PDF | Markup mode: pen, highlighter, eraser and text notes in 8 colours, with undo/redo. Two fingers still zoom and pan while drawing. *Save* writes them into the PDF as real Ink and FreeText annotations through an incremental update. The original bytes stay untouched, so bookmarks and forms survive, and any PDF app can show, edit or remove the marks. Encrypted files fall back to a flattened copy |
+| PDF | Markup mode: pen, highlighter, eraser, lasso and text notes, with undo/redo. See *Pen & stylus* below. *Save* writes the marks into the PDF as real Ink and FreeText annotations through an incremental update. The original bytes stay untouched, so bookmarks and forms survive, and any PDF app can show, edit or remove the marks. Pressure strokes keep their varying width. Encrypted files fall back to a flattened copy |
+
+## Pen & stylus
+
+Applies to PDF markup and the photo editor's Draw tool.
+
+- **Stylus draws, fingers navigate.** The first time a stylus touches the screen, fingers switch to scrolling and zooming. The hand button on the toolbar switches finger drawing back on, for phones without a pen. Touches from your palm are ignored while the pen is down. A pen that lands while you're scrolling takes over straight away.
+- **Two-finger tap undoes, three-finger tap redoes.** You get a haptic tick and a small *Undo* / *Redo* pill.
+- **Pressure** changes the line's thickness. Every sample the digitizer reports is used, and events are delivered unbuffered for lower latency.
+- **Hold to straighten:** pause at the end of a stroke and it becomes a straight line, which you can keep dragging; angles near 0°/45°/90° snap exactly. Closed loops become a clean rectangle or ellipse.
+- **Eraser:** removes whole strokes or only the part you rub over. The stylus's eraser end or side button erases with any tool.
+- **Lasso** (PDF): circle marks to select them, then drag, duplicate, recolour or delete them.
+- **Extras:** a hover ring shows where the pen will land and how big it is. The size slider has a true-to-scale preview, there's a custom colour strip that remembers recent colours, and you can pinch-zoom the photo canvas while drawing.
+- **Speed:** each page has separate layers for highlights, finished ink and the stroke in progress. A new pen sample redraws only the live layer, and that layer extends its path in place. Ink is saved to disk on a background thread.
 
 ## PDF tools
 

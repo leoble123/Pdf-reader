@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.geometry.Rect
+import app.lumen.reader.core.PenMath
 import app.lumen.reader.edit.Look
 import kotlin.math.abs
 import kotlin.math.cos
@@ -15,9 +16,12 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-/** A freehand stroke in output (cropped) space, normalized to 0..1. */
+/**
+ * A freehand stroke in output (cropped) space, normalized to 0..1. [widths] holds per-point
+ * pressure multipliers of [width] for stylus strokes.
+ */
 @Immutable
-class BrushStroke(val points: FloatArray, val color: Int, val width: Float)
+class BrushStroke(val points: FloatArray, val color: Int, val width: Float, val widths: FloatArray? = null)
 
 @Immutable
 data class TextLayer(
@@ -109,17 +113,9 @@ data class PhotoEdit(
                     strokeWidth = s.width * ref
                     color = s.color
                 }
-                val p = android.graphics.Path()
-                p.moveTo(s.points[0] * w, s.points[1] * h)
-                if (s.points.size == 2) p.lineTo(s.points[0] * w + 0.1f, s.points[1] * h)
-                var i = 2
-                while (i + 3 < s.points.size) {
-                    val cx = s.points[i] * w; val cy = s.points[i + 1] * h
-                    p.quadTo(cx, cy, (cx + s.points[i + 2] * w) / 2, (cy + s.points[i + 3] * h) / 2)
-                    i += 2
-                }
-                if (s.points.size > 2) p.lineTo(s.points[s.points.size - 2] * w, s.points[s.points.size - 1] * h)
-                c.drawPath(p, paint)
+                val widths = s.widths
+                if (widths != null) PenMath.drawVariable(c, s.points, widths, w, h, s.width * ref, paint)
+                else c.drawPath(PenMath.path(s.points, w, h), paint)
             }
         }
 

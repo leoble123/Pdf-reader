@@ -3,7 +3,25 @@ package app.lumen.reader.pdf
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.rememberSplineBasedDecay
+import android.os.SystemClock
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.changedToDown
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
+import app.lumen.reader.core.MultiTap
+import app.lumen.reader.core.isPen
+import app.lumen.reader.core.requestLowLatency
+import app.lumen.reader.core.wantsEraser
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateCentroidSize
@@ -119,7 +137,10 @@ fun PdfViewer(
     modifier: Modifier = Modifier,
     ink: InkController? = null,
     inkActive: Boolean = false,
-    onNoteRequest: (page: Int, x: Float, y: Float) -> Unit = { _, _, _ -> }
+    onNoteRequest: (page: Int, x: Float, y: Float) -> Unit = { _, _, _ -> },
+    fingerDraws: Boolean = true,
+    onStylus: () -> Unit = {},
+    onMultiTap: (fingers: Int) -> Unit = {}
 ) {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
@@ -128,6 +149,14 @@ fun PdfViewer(
     val details = remember(doc) { mutableStateMapOf<Int, Detail>() }
     val links = remember(doc) { mutableStateMapOf<Int, List<PdfLink>>() }
     var flingJob by remember { mutableStateOf<Job?>(null) }
+    val view = LocalView.current
+    val haptics = LocalHapticFeedback.current
+    val accent = MaterialTheme.colorScheme.primary
+    val fingerDrawsNow by rememberUpdatedState(fingerDraws)
+    val onStylusNow by rememberUpdatedState(onStylus)
+    val onMultiTapNow by rememberUpdatedState(onMultiTap)
+    // Where the pen hovers (or the eraser rubs), drawn as a ring so you see the tip before it lands.
+    var cursor by remember { mutableStateOf<PenCursor?>(null) }
 
     BoxWithConstraints(modifier.fillMaxSize().clipToBounds()) {
         val widthPx = constraints.maxWidth.toFloat()
@@ -217,7 +246,8 @@ fun PdfViewer(
                     activeRect = activeHit?.takeIf { it.first == index }?.second,
                     onLinks = { links[index] = it },
                     ink = ink,
-                    measurer = measurer
+                    measurer = measurer,
+                    accent = accent
                 )
             }
             item(key = "end") {
@@ -232,6 +262,27 @@ fun PdfViewer(
                         }
                 )
             }
+        }
+
+        if (inkActive && ink != null) {
+            Spacer(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { }
+                    .drawBehind {
+                        val c = cursor ?: return@drawBehind
+                        val px = pageWidthPx * state.scale
+                        if (c.eraser) {
+                            val r = (if (ink.eraseWhole) 0.016f else 0.012f) * px
+                            drawCircle(Color.White.copy(alpha = 0.35f), r, c.position)
+                            drawCircle(Color.Black.copy(alpha = 0.55f), r, c.position, style = Stroke(1.dp.toPx()))
+                        } else {
+                            val r = max(ink.width * px * (if (ink.tool == InkTool.Highlighter) 4f else 1f) / 2, 2.dp.toPx())
+                            drawCircle(Color(ink.color).copy(alpha = 0.45f), r, c.position)
+                            drawCircle(Color.Black.copy(alpha = 0.35f), r + 1.dp.toPx(), c.position, style = Stroke(1.dp.toPx()))
+                        }
+                    }
+            )
         }
 
         // Transparent gesture surface above the list: owns taps, pinch, pan and fling.
@@ -255,40 +306,159 @@ fun PdfViewer(
                     )
                 }
                 .pointerInput(doc, inkActive) {
+                    if (!inkActive) return@pointerInput
+                    // Stylus hover: show the tip as a ring (the eraser end shows the eraser size).
+                    awaitPointerEventScope {
+                        while (true) {
+                            val e = awaitPointerEvent(PointerEventPass.Initial)
+                            val c = e.changes.firstOrNull() ?: continue
+                            when {
+                                e.type == PointerEventType.Exit -> cursor = null
+                                c.isPen && !c.pressed && (e.type == PointerEventType.Move || e.type == PointerEventType.Enter) ->
+                                    cursor = PenCursor(c.position, e.wantsEraser(c) || ink?.tool == InkTool.Eraser)
+                                e.type == PointerEventType.Press -> cursor = null
+                            }
+                        }
+                    }
+                }
+                .pointerInput(doc, inkActive) {
+                    fun toList(p: Offset) = Offset((p.x - state.offsetX) / state.scale, p.y / state.scale)
+
+                    /** Normalized position on a given page (not clamped), so strokes can run off the edge. */
+                    fun onPage(page: Int, screen: Offset): Offset? {
+                        val info = state.listState.layoutInfo
+                        val item = info.visibleItemsInfo.firstOrNull { it.index == page } ?: return null
+                        val pos = toList(screen)
+                        val top = item.offset - info.viewportStartOffset
+                        return Offset((pos.x - hPadPx) / pageWidthPx, (pos.y - top) / item.size)
+                    }
+
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        // Markup: one finger draws, two fingers still pinch and pan.
-                        val drawing = inkActive && ink != null && ink.tool != InkTool.Text
-                        var inking = false
-                        if (drawing) {
-                            val pos = Offset((down.position.x - state.offsetX) / state.scale, down.position.y / state.scale)
-                            pageAt(state, doc, pos, hPadPx, pageWidthPx)?.let { (p, x, y) ->
-                                inking = true
-                                if (ink.tool == InkTool.Eraser) ink.erase(p, x, y) else ink.begin(p, x, y)
-                                down.consume()
+                        val inkNow = ink
+
+                        /**
+                         * Runs one pen stroke (draw, erase, lasso or dragging a selection) for the
+                         * pointer [start]. Returns true when the gesture should turn into navigation
+                         * instead (a second finger landed while finger-drawing).
+                         */
+                        suspend fun AwaitPointerEventScope.stroke(start: PointerInputChange): Boolean {
+                            val ink = inkNow!!
+                            val id = start.id
+                            val pen = start.isPen
+                            val startEvent = currentEvent
+                            if (pen) requestLowLatency(view, startEvent)
+                            val hit = pageAt(state, doc, toList(start.position), hPadPx, pageWidthPx)
+                            if (hit == null) {
+                                if (!pen) return true
+                                // A pen off the page does nothing (and never scrolls).
+                                do {
+                                    val e = awaitPointerEvent()
+                                    e.changes.fastForEach { it.consume() }
+                                } while (e.changes.fastAny { it.id == id && it.pressed })
+                                return false
                             }
-                        }
-                        if (inking) {
-                            var stillInking = true
-                            while (stillInking) {
-                                val event = awaitPointerEvent()
-                                val pressed = event.changes.count { it.pressed }
-                                if (pressed == 0) {
-                                    ink!!.end(); return@awaitEachGesture
+                            val (page, nx, ny) = hit
+                            val aspect = doc.aspect(page)
+                            val sel = ink.selection
+                            val dragging = sel != null && sel.page == page && sel.contains(nx, ny)
+                            val erasing = !dragging && (ink.tool == InkTool.Eraser || startEvent.wantsEraser(start))
+                            if (sel != null && !dragging) ink.clearSelection()
+                            when {
+                                dragging -> {}
+                                erasing -> {
+                                    ink.beginBatch()
+                                    ink.erase(page, nx, ny, aspect)
+                                    cursor = PenCursor(start.position, true)
                                 }
-                                if (pressed > 1) {
-                                    ink!!.cancel(); stillInking = false
-                                } else {
-                                    val c = event.changes.first { it.pressed }
-                                    val pos = Offset((c.position.x - state.offsetX) / state.scale, c.position.y / state.scale)
-                                    pageAt(state, doc, pos, hPadPx, pageWidthPx)?.let { (p, x, y) ->
-                                        if (ink!!.tool == InkTool.Eraser) ink.erase(p, x, y)
-                                        else if (ink.live?.first == p) ink.extend(x, y)
+                                else -> ink.begin(page, nx, ny, if (pen) start.pressure else null, aspect)
+                            }
+                            start.consume()
+                            var last = Offset(nx, ny)
+                            var lastPressure = start.pressure
+                            val canSnap = !dragging && !erasing && ink.tool != InkTool.Lasso
+                            var snapped = false
+                            var anchor = start.position
+                            var anchorTime = start.uptimeMillis
+                            val still = 7.dp.toPx()
+
+                            fun sample(screen: Offset, pressure: Float) {
+                                val p = onPage(page, screen) ?: return
+                                when {
+                                    dragging -> {
+                                        ink.dragSelection(p.x - last.x, p.y - last.y); last = p
                                     }
-                                    c.consume()
+                                    erasing -> ink.erase(page, p.x, p.y, aspect)
+                                    else -> ink.extend(p.x, p.y, if (pen) pressure else null)
                                 }
                             }
+
+                            fun finish() {
+                                when {
+                                    dragging -> ink.endDrag()
+                                    erasing -> {
+                                        ink.endBatch(); cursor = null
+                                    }
+                                    else -> ink.end()
+                                }
+                            }
+
+                            while (true) {
+                                val event = if (canSnap && !snapped) {
+                                    // Hold still to straighten: wake up even if no events arrive.
+                                    val remaining = anchorTime + HoldToSnapMillis - SystemClock.uptimeMillis()
+                                    if (remaining <= 0) null else withTimeoutOrNull(remaining) { awaitPointerEvent() }
+                                } else awaitPointerEvent()
+                                if (event == null) {
+                                    snapped = true
+                                    if (ink.snapLive()) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    continue
+                                }
+                                val c = event.changes.fastFirstOrNull { it.id == id }
+                                if (c == null || !c.pressed) {
+                                    event.changes.fastForEach { it.consume() }
+                                    finish()
+                                    return false
+                                }
+                                if (!pen && event.changes.count { it.pressed } > 1) {
+                                    // Finger drawing: a second finger means zoom/scroll, not ink.
+                                    if (dragging) ink.endDrag() else if (erasing) {
+                                        ink.endBatch(); cursor = null
+                                    } else ink.cancel()
+                                    return true
+                                }
+                                // Stylus digitizers report several samples per frame; use them all.
+                                val hist = c.historical
+                                for (k in hist.indices) {
+                                    val t = (k + 1f) / (hist.size + 1)
+                                    sample(hist[k].position, lastPressure + (c.pressure - lastPressure) * t)
+                                }
+                                sample(c.position, c.pressure)
+                                lastPressure = c.pressure
+                                if (erasing) cursor = PenCursor(c.position, true)
+                                if ((c.position - anchor).getDistance() > still) {
+                                    anchor = c.position; anchorTime = c.uptimeMillis
+                                } else if (canSnap && !snapped && c.uptimeMillis - anchorTime >= HoldToSnapMillis) {
+                                    snapped = true
+                                    if (ink.snapLive()) haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                }
+                                // Palm rejection: every other touch during a pen stroke is swallowed.
+                                event.changes.fastForEach { it.consume() }
+                            }
                         }
+
+                        val markup = inkActive && inkNow != null && inkNow.tool != InkTool.Text
+                        if (markup) {
+                            if (down.type == PointerType.Stylus || down.type == PointerType.Eraser) onStylusNow()
+                            val onSelection = !down.isPen && inkNow.selection?.let { sel ->
+                                pageAt(state, doc, toList(down.position), hPadPx, pageWidthPx)
+                                    ?.let { (p, x, y) -> p == sel.page && sel.contains(x, y) }
+                            } == true
+                            if (down.isPen || fingerDrawsNow || onSelection) {
+                                if (!stroke(down)) return@awaitEachGesture
+                            }
+                        }
+
                         if (flingJob?.isActive == true) {
                             flingJob?.cancel()
                             down.consume()
@@ -303,11 +473,27 @@ fun PdfViewer(
                         var lastPressed = 1
                         var multiTouchAtEnd = false
                         val slop = viewConfiguration.touchSlop
+                        val taps = MultiTap(down.uptimeMillis, slop)
+                        taps.track(currentEvent)
+                        var penMidway: PointerInputChange? = null
                         while (true) {
                             val event = awaitPointerEvent()
+                            taps.track(event)
+                            if (markup) {
+                                // A pen landing while fingers scroll takes over immediately.
+                                penMidway = event.changes.fastFirstOrNull { it.isPen && it.changedToDown() }
+                                if (penMidway != null) break
+                            }
                             if (event.changes.fastAny { it.isConsumed && it.pressed && it.positionChanged() }) break
                             val pressed = event.changes.count { it.pressed }
-                            if (pressed == 0) break
+                            if (pressed == 0) {
+                                val fingers = taps.fingers()
+                                if (!pastSlop && fingers >= 2) {
+                                    if (inkActive) event.changes.fastForEach { it.consume() }
+                                    onMultiTapNow(fingers)
+                                }
+                                break
+                            }
                             if (pressed != lastPressed) {
                                 tracker.resetTracking()
                                 trackedId = event.changes.fastFirstOrNull { it.pressed }!!.id
@@ -333,6 +519,11 @@ fun PdfViewer(
                             }
                         }
                         state.isInteracting = false
+                        penMidway?.let { p ->
+                            onStylusNow()
+                            stroke(p)
+                            return@awaitEachGesture
+                        }
                         if (pastSlop && !multiTouchAtEnd) {
                             val v = tracker.calculateVelocity()
                             flingJob = scope.launch { state.fling(v, decay) }
@@ -342,6 +533,11 @@ fun PdfViewer(
         )
     }
 }
+
+private class PenCursor(val position: Offset, val eraser: Boolean)
+
+/** How long the pen has to rest before a stroke snaps to a line or shape. */
+private const val HoldToSnapMillis = 480L
 
 private data class DetailTrigger(
     val scale: Float,
@@ -397,7 +593,8 @@ private fun PdfPage(
     activeRect: Int?,
     onLinks: (List<PdfLink>) -> Unit,
     ink: InkController?,
-    measurer: androidx.compose.ui.text.TextMeasurer
+    measurer: androidx.compose.ui.text.TextMeasurer,
+    accent: Color
 ) {
     var image by remember(index, widthPx) {
         mutableStateOf(
@@ -465,12 +662,34 @@ private fun PdfPage(
                     )
                 }
                 hit?.let { drawHits(it, activeRect) }
-                if (ink != null) {
-                    ink.pages[index]?.let { drawMarks(it, measurer) }
-                    ink.live?.takeIf { it.first == index }?.let { drawMarks(listOf(it.second), measurer) }
-                }
             }
-    )
+    ) {
+        if (ink != null) {
+            // Each kind of ink gets its own layer: a new stroke sample re-records only the live
+            // layer, and committed marks are replayed from their display list for free.
+            val highlightBlend = if (theme == PageTheme.Dark) BlendMode.Screen else BlendMode.Multiply
+            val marks = ink.pages[index]
+            val selected = ink.selection?.takeIf { it.page == index }
+            if (!marks.isNullOrEmpty()) {
+                val skip = selected?.indices
+                if (marks.fastAny { it is Mark.Ink && it.highlighter }) {
+                    Spacer(
+                        Modifier.matchParentSize()
+                            .graphicsLayer { blendMode = highlightBlend }
+                            .drawBehind { drawMarks(marks, null, highlights = true, skip = skip) }
+                    )
+                }
+                Spacer(Modifier.matchParentSize().graphicsLayer { }.drawBehind { drawMarks(marks, measurer, highlights = false, skip = skip) })
+            }
+            if (ink.live?.page == index || selected != null) {
+                Spacer(
+                    Modifier.matchParentSize()
+                        .graphicsLayer { blendMode = if (ink.live?.highlighter == true) highlightBlend else BlendMode.SrcOver }
+                        .drawBehind { drawLive(ink, index, measurer, accent) }
+                )
+            }
+        }
+    }
 }
 
 private fun DrawScope.drawHits(hit: SearchHit, active: Int?) {

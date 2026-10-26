@@ -98,6 +98,7 @@ import androidx.compose.ui.graphics.Color
 import app.lumen.reader.core.Recents
 import app.lumen.reader.ui.components.AppIconButton
 import app.lumen.reader.ui.components.Panel
+import app.lumen.reader.ui.components.GestureHudView
 import app.lumen.reader.ui.theme.Lumen
 import app.lumen.reader.viewer.BottomPill
 import app.lumen.reader.viewer.CenteredMessage
@@ -232,6 +233,21 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
     var markup by rememberSaveable { mutableStateOf(false) }
     var note by remember { mutableStateOf<Triple<Int, Float, Float>?>(null) }
     var exportProgress by remember { mutableStateOf<Float?>(null) }
+    val settings = app.lumen.reader.core.LocalSettings.current
+    val hud = remember { app.lumen.reader.ui.components.GestureHud() }
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    fun undoInk() {
+        if (ink.undo()) {
+            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm)
+            hud.show("Undo", Icons.AutoMirrored.Rounded.Undo)
+        } else hud.show("Nothing to undo")
+    }
+    fun redoInk() {
+        if (ink.redo()) {
+            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm)
+            hud.show("Redo", Icons.AutoMirrored.Rounded.Redo)
+        } else hud.show("Nothing to redo")
+    }
 
     /**
      * Writes the markup into the PDF as real annotations (incremental update, original bytes
@@ -274,7 +290,10 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
             tmp.delete()
         }
     }
-    androidx.activity.compose.BackHandler(markup && note == null) { markup = false }
+    androidx.activity.compose.BackHandler(markup && note == null) {
+        if (ink.selection != null) ink.clearSelection() else markup = false
+    }
+    LaunchedEffect(markup) { if (!markup) ink.clearSelection() }
 
     LaunchedEffect(doc) { doc.measurePages() }
     LaunchedEffect(doc) {
@@ -352,9 +371,9 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
         } else null,
         actions = {
             if (markup) {
-                AppIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", { ink.undo() },
+                AppIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", { undoInk() },
                     iconTint = if (ink.canUndo) Color.Unspecified else colors.contentTertiary)
-                AppIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", { ink.redo() },
+                AppIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", { redoInk() },
                     iconTint = if (ink.canRedo) Color.Unspecified else colors.contentTertiary)
                 AppIconButton(Icons.Rounded.SaveAlt, "Save markup into PDF", ::export, enabled = !ink.isEmpty)
                 AppIconButton(Icons.Rounded.Check, "Done", { markup = false }, tint = colors.accent, iconTint = Color.White)
@@ -398,6 +417,7 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
                 NotePanel(onAdd = { text -> ink.addNote(page, x, y, text); note = null }, onCancel = { note = null })
             }
             PageScrubber(state, doc.pageCount, visible = chrome || state.isInteracting || state.listState.isScrollInProgress)
+            GestureHudView(hud, Modifier.padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + TopBarHeight + 16.dp))
             AnimatedVisibility(
                 goTo,
                 modifier = Modifier.align(Alignment.BottomCenter),
@@ -423,6 +443,16 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
             ink = ink,
             inkActive = markup,
             onNoteRequest = { p, x, y -> note = Triple(p, x, y) },
+            fingerDraws = settings.fingerDraws,
+            onStylus = {
+                if (settings.noteStylus()) hud.show("Stylus detected · fingers now scroll")
+            },
+            onMultiTap = { fingers ->
+                if (markup) when (fingers) {
+                    2 -> undoInk()
+                    3 -> redoInk()
+                }
+            },
             onLink = { link ->
                 when {
                     link.page != null -> scope.launch { state.jumpTo(link.page) }
@@ -432,61 +462,6 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
                 }
             }
         )
-    }
-}
-
-@Composable
-private fun InkToolbar(ink: InkController) {
-    val colors = Lumen.colors
-    Panel(Modifier.padding(horizontal = 12.dp).widthIn(max = 560.dp).fillMaxWidth(), cornerRadius = 28.dp) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                listOf(
-                    InkTool.Pen to Icons.Rounded.Edit,
-                    InkTool.Highlighter to Icons.Rounded.BorderColor,
-                    InkTool.Eraser to Icons.Rounded.CleaningServices,
-                    InkTool.Text to Icons.Rounded.TextFields
-                ).forEach { (tool, icon) ->
-                    val sel = ink.tool == tool
-                    Box(
-                        Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(if (sel) colors.accent else androidx.compose.ui.graphics.Color.Transparent)
-                            .clickable {
-                                if (sel && tool != InkTool.Eraser && tool != InkTool.Text) {
-                                    // Tapping the active pen cycles its thickness.
-                                    ink.width = when {
-                                        ink.width < 0.003f -> 0.004f
-                                        ink.width < 0.006f -> 0.008f
-                                        else -> 0.0022f
-                                    }
-                                }
-                                ink.tool = tool
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        androidx.compose.foundation.Image(
-                            icon, tool.name, Modifier.size(22.dp),
-                            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(if (sel) colors.onAccent else colors.content)
-                        )
-                    }
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                InkController.Palette.forEach { c ->
-                    val sel = ink.color == c
-                    Box(
-                        Modifier
-                            .size(if (sel) 30.dp else 24.dp)
-                            .clip(CircleShape)
-                            .background(androidx.compose.ui.graphics.Color(c))
-                            .border(2.dp, if (sel) colors.accent else colors.hairline, CircleShape)
-                            .clickable { ink.color = c }
-                    )
-                }
-            }
-        }
     }
 }
 

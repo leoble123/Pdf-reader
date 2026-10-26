@@ -71,8 +71,9 @@ object PdfAnnotator {
 
     private fun ink(up: PdfUpdater, geo: Geometry, m: Mark.Ink): PdfRef {
         val pts = (0 until m.points.size / 2).map { geo.map(m.points[it * 2], m.points[it * 2 + 1]) }
-        val width = m.width * geo.displayW
-        val pad = width
+        val width = m.averageWidth * geo.displayW
+        val widths = m.widths?.takeIf { !m.highlighter && it.size == pts.size }
+        val pad = if (widths != null) m.width * geo.displayW * (widths.maxOrNull() ?: 1f) else width
         val minX = pts.minOf { it.first } - pad; val maxX = pts.maxOf { it.first } + pad
         val minY = pts.minOf { it.second } - pad; val maxY = pts.maxOf { it.second } + pad
         val (r, g, b) = rgb(m.color)
@@ -80,9 +81,18 @@ object PdfAnnotator {
         val path = StringBuilder()
         path.append("${f(r)} ${f(g)} ${f(b)} RG ${f(width)} w ${if (m.highlighter) 2 else 1} J 1 j ")
         if (m.highlighter) path.append("/GS0 gs ")
-        pts.forEachIndexed { i, (x, y) -> path.append("${f(x)} ${f(y)} ${if (i == 0) "m" else "l"} ") }
-        if (pts.size == 1) path.append("${f(pts[0].first + 0.01)} ${f(pts[0].second)} l ")
-        path.append("S")
+        if (widths != null && pts.size > 1) {
+            // Pressure strokes: one segment per sample pair, each stroked at its own width.
+            val base = m.width * geo.displayW
+            for (i in 1 until pts.size) {
+                val w = base * (widths[i - 1] + widths[i]) / 2
+                path.append("${f(w)} w ${f(pts[i - 1].first)} ${f(pts[i - 1].second)} m ${f(pts[i].first)} ${f(pts[i].second)} l S ")
+            }
+        } else {
+            pts.forEachIndexed { i, (x, y) -> path.append("${f(x)} ${f(y)} ${if (i == 0) "m" else "l"} ") }
+            if (pts.size == 1) path.append("${f(pts[0].first + 0.01)} ${f(pts[0].second)} l ")
+            path.append("S")
+        }
         val resources = PdfDict()
         if (m.highlighter) {
             resources["ExtGState"] = PdfDict().apply {

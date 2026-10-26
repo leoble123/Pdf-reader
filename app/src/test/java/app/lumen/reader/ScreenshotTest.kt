@@ -2,7 +2,17 @@ package app.lumen.reader
 
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.dp
+import app.lumen.reader.pdf.drawLive
+import app.lumen.reader.pdf.drawMarks
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -133,6 +143,74 @@ class ScreenshotTest {
     @Test fun photoEditor() {
         shoot("edit_photo", settleMs = 4000, studio = true) { app.lumen.reader.edit.photo.PhotoEditorScreen(fixture("sample.jpg")) {} }
     }
+
+    @Test fun photoEditorDraw() {
+        shoot("edit_photo_draw", settleMs = 4000, studio = true) { app.lumen.reader.edit.photo.PhotoEditorScreen(fixture("sample.jpg"), drawFirst = true) {} }
+    }
+
+    /** A page mock-up with every kind of mark, drawn through the same layers as the PDF viewer. */
+    private fun markup(name: String, tool: app.lumen.reader.pdf.InkTool, select: Boolean) {
+        val ink = app.lumen.reader.pdf.InkController(File.createTempFile("ink", ".json").apply { delete() })
+        val wave = FloatArray(60) { i -> if (i % 2 == 0) 0.08f + i / 2 * 0.012f else 0.1f + 0.03f * kotlin.math.sin(i / 2 * 0.4f) }
+        val pressure = FloatArray(30) { 0.3f + 1.0f * kotlin.math.sin(it / 29f * Math.PI.toFloat()) }
+        ink.pages[0] = listOf(
+            app.lumen.reader.pdf.Mark.Ink(wave, 0xFF1F6FEB.toInt(), 0.006f, false, pressure),
+            app.lumen.reader.pdf.Mark.Ink(floatArrayOf(0.08f, 0.31f, 0.7f, 0.31f), 0xFFFFD60A.toInt(), 0.022f, true),
+            app.lumen.reader.pdf.Mark.Ink(app.lumen.reader.core.PenMath.rect(0.55f, 0.45f, 0.9f, 0.6f), 0xFFE5484D.toInt(), 0.004f, false),
+            app.lumen.reader.pdf.Mark.Ink(app.lumen.reader.core.PenMath.ellipse(0.3f, 0.52f, 0.18f, 0.06f), 0xFF30A46C.toInt(), 0.004f, false),
+            app.lumen.reader.pdf.Mark.Note(0.1f, 0.7f, "Check this figure", 0xFF8E4EC6.toInt(), 0.04f)
+        )
+        ink.selectTool(tool)
+        if (select) {
+            ink.begin(0, 0.5f, 0.42f, null, 0.75f)
+            listOf(0.95f to 0.42f, 0.95f to 0.63f, 0.5f to 0.63f, 0.5f to 0.43f).forEach { (x, y) -> ink.extend(x, y, null) }
+            ink.end()
+        }
+        shoot(name, dark = false) {
+            val measurer = androidx.compose.ui.text.rememberTextMeasurer()
+            val accent = androidx.compose.material3.MaterialTheme.colorScheme.primary
+            androidx.compose.foundation.layout.Box(
+                androidx.compose.ui.Modifier.fillMaxSize().background(androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainer)
+            ) {
+                androidx.compose.foundation.layout.Box(
+                    androidx.compose.ui.Modifier
+                        .padding(16.dp)
+                        .fillMaxWidth()
+                        .aspectRatio(0.75f)
+                        .background(androidx.compose.ui.graphics.Color.White)
+                        .drawBehind {
+                            for (i in 0 until 14) drawRect(
+                                androidx.compose.ui.graphics.Color(0xFF444444),
+                                topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.08f, size.height * (0.29f + i * 0.05f)),
+                                size = androidx.compose.ui.geometry.Size(size.width * (0.84f - (i % 3) * 0.1f), size.height * 0.012f)
+                            )
+                        }
+                ) {
+                    val marks = ink.pages[0]!!
+                    val skip = ink.selection?.indices
+                    androidx.compose.foundation.layout.Spacer(
+                        androidx.compose.ui.Modifier.matchParentSize()
+                            .graphicsLayer { blendMode = androidx.compose.ui.graphics.BlendMode.Multiply }
+                            .drawBehind { drawMarks(marks, null, highlights = true, skip = skip) }
+                    )
+                    androidx.compose.foundation.layout.Spacer(
+                        androidx.compose.ui.Modifier.matchParentSize().graphicsLayer { }
+                            .drawBehind { drawMarks(marks, measurer, highlights = false, skip = skip) }
+                    )
+                    androidx.compose.foundation.layout.Spacer(
+                        androidx.compose.ui.Modifier.matchParentSize().drawBehind { drawLive(ink, 0, measurer, accent) }
+                    )
+                }
+                androidx.compose.foundation.layout.Box(
+                    androidx.compose.ui.Modifier.align(androidx.compose.ui.Alignment.BottomCenter).padding(bottom = 24.dp)
+                ) { app.lumen.reader.pdf.InkToolbar(ink) }
+            }
+        }
+    }
+
+    @Test fun markupPen() = markup("markup_pen", app.lumen.reader.pdf.InkTool.Pen, select = false)
+    @Test fun markupLasso() = markup("markup_lasso", app.lumen.reader.pdf.InkTool.Lasso, select = true)
+    @Test fun markupEraser() = markup("markup_eraser", app.lumen.reader.pdf.InkTool.Eraser, select = false)
 
     @Test fun videoEditor() {
         val img = fixture("sample.jpg")

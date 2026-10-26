@@ -5,6 +5,35 @@ import android.graphics.ImageDecoder
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.os.Build
+import android.os.SystemClock
+import androidx.compose.animation.rememberSplineBasedDecay
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculateCentroidSize
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.changedToDown
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.toSize
+import app.lumen.reader.core.LocalSettings
+import app.lumen.reader.core.MultiTap
+import app.lumen.reader.core.PenMath
+import app.lumen.reader.core.PenStroke
+import app.lumen.reader.core.isPen
+import app.lumen.reader.core.requestLowLatency
+import app.lumen.reader.core.wantsEraser
+import app.lumen.reader.image.ZoomState
+import app.lumen.reader.image.zoomLayer
+import app.lumen.reader.ui.components.GestureHud
+import app.lumen.reader.ui.components.GestureHudView
+import app.lumen.reader.ui.components.StrokePreview
+import kotlin.math.abs
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -116,7 +145,7 @@ private const val PROXY_SIZE = 1600
 private const val EXPORT_MAX = 4096
 
 @Composable
-fun PhotoEditorScreen(ref: DocRef?, onBack: () -> Unit) {
+fun PhotoEditorScreen(ref: DocRef?, drawFirst: Boolean = false, onBack: () -> Unit) {
     val context = LocalContext.current
     val pickers = LocalPickers.current
     var source by remember { mutableStateOf(ref) }
@@ -132,12 +161,12 @@ fun PhotoEditorScreen(ref: DocRef?, onBack: () -> Unit) {
     if (src == null) {
         Box(Modifier.fillMaxSize().background(Studio.background)) { LoadingIndicator() }
     } else {
-        PhotoEditor(src, onBack)
+        PhotoEditor(src, drawFirst, onBack)
     }
 }
 
 @Composable
-private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
+private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
     val pickers = LocalPickers.current
     val scope = rememberCoroutineScope()
@@ -147,7 +176,7 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
     val history = remember { mutableStateListOf(PhotoEdit()) }
     var index by remember { mutableIntStateOf(0) }
     var edit by remember { mutableStateOf(PhotoEdit()) }
-    var tool by remember { mutableStateOf(Tool.Adjust) }
+    var tool by remember { mutableStateOf(if (drawFirst) Tool.Draw else Tool.Adjust) }
     var adjustment by remember { mutableStateOf(Adjustment.Exposure) }
     var comparing by remember { mutableStateOf(false) }
     var brushColor by remember { mutableIntStateOf(Studio.swatches[2]) }
@@ -156,6 +185,17 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
     var saving by remember { mutableStateOf(false) }
     var confirmExit by remember { mutableStateOf(false) }
     var savedIndex by remember { mutableIntStateOf(0) }
+    val zoom = remember { ZoomState(maxScale = 8f) }
+    var frame by remember { mutableStateOf(Rect.Zero) }
+    var live by remember { mutableStateOf<PenStroke?>(null) }
+    var liveVersion by remember { mutableIntStateOf(0) }
+    var brushErase by remember { mutableStateOf(false) }
+    val hud = remember { GestureHud() }
+    val settings = LocalSettings.current
+    val haptics = LocalHapticFeedback.current
+    val view = LocalView.current
+    val decay = rememberSplineBasedDecay<Float>()
+    LaunchedEffect(tool) { if (tool == Tool.Crop) zoom.reset() }
 
     LaunchedEffect(ref) {
         runCatching { withContext(Dispatchers.IO) { decode(context, ref, PROXY_SIZE) } }
@@ -171,17 +211,30 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
         index = history.lastIndex
     }
 
-    fun undo() {
+    fun undo(): Boolean {
         if (index > 0) {
             index--; edit = history[index]; selectedText = null
+            return true
         }
+        return false
     }
 
-    fun redo() {
+    fun redo(): Boolean {
         if (index < history.lastIndex) {
             index++; edit = history[index]
+            return true
         }
+        return false
     }
+
+    fun gestureUndo(redo: Boolean) {
+        val ok = if (redo) redo() else undo()
+        if (ok) {
+            haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            hud.show(if (redo) "Redo" else "Undo", if (redo) Icons.AutoMirrored.Rounded.Redo else Icons.AutoMirrored.Rounded.Undo)
+        } else hud.show(if (redo) "Nothing to redo" else "Nothing to undo")
+    }
+    val latestEdit = androidx.compose.runtime.rememberUpdatedState(edit)
 
     fun export(thenClose: Boolean) {
         if (saving) return
@@ -222,15 +275,177 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
         Box(
             Modifier
                 .fillMaxSize()
-                
                 .background(Studio.background)
                 .padding(top = top + 72.dp, bottom = bottom + 200.dp, start = 12.dp, end = 12.dp)
+                .onSizeChanged { zoom.viewport = it.toSize() }
+                .pointerInput(tool, brushColor, brushSize, brushErase) {
+                    if (tool == Tool.Crop) return@pointerInput
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        fun norm(p: Offset): Offset {
+                            val l = (p - zoom.offset) / zoom.scale
+                            return Offset((l.x - frame.left) / frame.width, (l.y - frame.top) / frame.height)
+                        }
+                        val aspect = if (frame.height > 0f) frame.width / frame.height else 1f
+                        val eraseRadius = max(brushSize, 0.02f) * min(frame.width, frame.height) / max(frame.width, 1f)
+
+                        fun erased(e: PhotoEdit, at: Offset): PhotoEdit {
+                            var changed = false
+                            val out = e.strokes.flatMap { st ->
+                                val reach = eraseRadius + st.width * min(frame.width, frame.height) / max(frame.width, 1f) / 2
+                                val pieces = PenMath.eraseFrom(st.points, st.widths, at.x, at.y, reach, aspect)
+                                if (pieces == null) listOf(st) else {
+                                    changed = true
+                                    pieces.map { BrushStroke(it.points, st.color, st.width, it.widths) }
+                                }
+                            }
+                            return if (changed) e.copy(strokes = out) else e
+                        }
+
+                        /** One brush stroke (or eraser pass). True = hand over to zoom/pan. */
+                        suspend fun AwaitPointerEventScope.stroke(start: PointerInputChange): Boolean {
+                            val pen = start.isPen
+                            val startEvent = currentEvent
+                            if (pen) requestLowLatency(view, startEvent)
+                            val p0 = norm(start.position)
+                            if (!pen && (p0.x !in -0.05f..1.05f || p0.y !in -0.05f..1.05f)) return true
+                            val erasing = brushErase || startEvent.wantsEraser(start)
+                            val base = latestEdit.value
+                            var cur = base
+                            val s = PenStroke(aspect, pressure = pen)
+                            if (erasing) {
+                                cur = erased(cur, p0); edit = cur
+                            } else {
+                                s.add(p0.x.coerceIn(0f, 1f), p0.y.coerceIn(0f, 1f), start.pressure)
+                                live = s; liveVersion++
+                            }
+                            start.consume()
+                            var lastPressure = start.pressure
+                            var snapped = erasing
+                            var anchor = start.position
+                            var anchorTime = start.uptimeMillis
+                            val still = 7.dp.toPx()
+                            fun sample(screen: Offset, pressure: Float) {
+                                val q = norm(screen)
+                                if (erasing) {
+                                    cur = erased(cur, q); edit = cur
+                                } else if (s.add(q.x.coerceIn(0f, 1f), q.y.coerceIn(0f, 1f), pressure)) liveVersion++
+                            }
+                            while (true) {
+                                val event = if (!snapped) {
+                                    val remaining = anchorTime + 480L - SystemClock.uptimeMillis()
+                                    if (remaining <= 0) null else withTimeoutOrNull(remaining) { awaitPointerEvent() }
+                                } else awaitPointerEvent()
+                                if (event == null) {
+                                    snapped = true
+                                    if (s.snap()) {
+                                        liveVersion++
+                                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                                    }
+                                    continue
+                                }
+                                val c = event.changes.firstOrNull { it.id == start.id }
+                                if (c == null || !c.pressed) {
+                                    event.changes.forEach { it.consume() }
+                                    break
+                                }
+                                if (!pen && event.changes.count { it.pressed } > 1) {
+                                    live = null; liveVersion++
+                                    if (erasing) edit = base
+                                    return true
+                                }
+                                val hist = c.historical
+                                for (k in hist.indices) sample(hist[k].position, lastPressure + (c.pressure - lastPressure) * (k + 1f) / (hist.size + 1))
+                                sample(c.position, c.pressure)
+                                lastPressure = c.pressure
+                                if ((c.position - anchor).getDistance() > still) {
+                                    anchor = c.position; anchorTime = c.uptimeMillis
+                                }
+                                event.changes.forEach { it.consume() }
+                            }
+                            if (erasing) {
+                                if (cur !== base) commit(cur)
+                            } else {
+                                live = null; liveVersion++
+                                commit(base.copy(strokes = base.strokes + BrushStroke(s.points(), brushColor, brushSize * s.evenWidth(), s.widths())))
+                            }
+                            return false
+                        }
+
+                        if (tool == Tool.Draw && proxy != null) {
+                            if (down.type == PointerType.Stylus || down.type == PointerType.Eraser) {
+                                if (settings.noteStylus()) hud.show("Stylus detected · fingers now zoom")
+                            }
+                            if (down.isPen || settings.fingerDraws) {
+                                if (!stroke(down)) return@awaitEachGesture
+                            }
+                        }
+
+                        // Fingers: pinch to zoom, drag to pan, quick 2/3-finger tap to undo/redo.
+                        zoom.isInteracting = true
+                        val taps = MultiTap(down.uptimeMillis, viewConfiguration.touchSlop)
+                        taps.track(currentEvent)
+                        val tracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                        var past = false
+                        var zoomAcc = 1f
+                        var panAcc = Offset.Zero
+                        var count = 1
+                        var multi = false
+                        var penMidway: PointerInputChange? = null
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            taps.track(e)
+                            if (tool == Tool.Draw) {
+                                penMidway = e.changes.firstOrNull { it.isPen && it.changedToDown() }
+                                if (penMidway != null) break
+                            }
+                            if (e.changes.any { it.isConsumed && it.positionChanged() }) break
+                            val pressed = e.changes.count { it.pressed }
+                            if (pressed == 0) {
+                                val f = taps.fingers()
+                                if (!past && f >= 2) {
+                                    e.changes.forEach { it.consume() }
+                                    gestureUndo(redo = f >= 3)
+                                }
+                                break
+                            }
+                            if (pressed != count) {
+                                count = pressed; tracker.resetTracking()
+                            }
+                            multi = pressed > 1
+                            val z = e.calculateZoom()
+                            val pan = e.calculatePan()
+                            if (!past) {
+                                zoomAcc *= z; panAcc += pan
+                                val wantsPan = zoom.isZoomed && panAcc.getDistance() > viewConfiguration.touchSlop
+                                if (abs(1 - zoomAcc) * e.calculateCentroidSize(false) > viewConfiguration.touchSlop || wantsPan) past = true
+                            }
+                            if (past) {
+                                if (z != 1f) zoom.zoomBy(z, e.calculateCentroid(true))
+                                zoom.panBy(pan)
+                                e.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                            e.changes.firstOrNull { it.pressed }?.let { tracker.addPosition(it.uptimeMillis, it.position) }
+                        }
+                        penMidway?.let {
+                            zoom.isInteracting = false
+                            stroke(it)
+                            return@awaitEachGesture
+                        }
+                        val v = tracker.calculateVelocity()
+                        scope.launch {
+                            if (past && !multi && zoom.isZoomed) zoom.fling(v, decay) else zoom.settle()
+                            zoom.isInteracting = false
+                        }
+                    }
+                }
         ) {
             val p = proxy
             when {
                 error != null -> BasicText(error!!, style = type.body.copy(color = Studio.text), modifier = Modifier.align(Alignment.Center))
                 p == null -> LoadingIndicator()
-                else -> PhotoCanvas(
+                else -> Box(Modifier.fillMaxSize().zoomLayer(zoom)) {
+                    PhotoCanvas(
                     proxy = p,
                     edit = if (comparing) PhotoEdit(rotation = edit.rotation, flipH = edit.flipH, straighten = edit.straighten, crop = edit.crop) else edit,
                     tool = tool,
@@ -239,9 +454,14 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
                     selectedText = selectedText,
                     onSelectText = { selectedText = it },
                     onLive = { edit = it },
-                    onCommit = { commit(it) }
+                    onCommit = { commit(it) },
+                    onFrame = { frame = it; zoom.fitted = it },
+                    live = live,
+                    liveVersion = { liveVersion }
                 )
+                }
             }
+            GestureHudView(hud)
         }
 
         // Top bar
@@ -252,8 +472,8 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
         ) {
             StudioIconButton(Icons.Rounded.Close, "Close", ::exit)
             Spacer(Modifier.weight(1f))
-            StudioIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", ::undo, enabled = index > 0)
-            StudioIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", ::redo, enabled = index < history.lastIndex)
+            StudioIconButton(Icons.AutoMirrored.Rounded.Undo, "Undo", { undo() }, enabled = index > 0)
+            StudioIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", { redo() }, enabled = index < history.lastIndex)
             Box(
                 Modifier
                     .size(44.dp)
@@ -290,10 +510,17 @@ private fun PhotoEditor(ref: DocRef, onBack: () -> Unit) {
                             FilterPanel(p, edit.look, { edit = edit.copy(look = it) }, { commit(edit.copy(look = it)) }, { commit() })
                         }
                         Tool.Crop -> proxy?.let { p -> CropPanel(edit, p.width, p.height, { edit = it }, { commit(it) }, { commit() }) }
-                        Tool.Draw -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ColorDots(brushColor) { brushColor = it }
+                        Tool.Draw -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ChipRow {
+                                Chip("Brush", !brushErase, { brushErase = false })
+                                Chip("Eraser", brushErase, { brushErase = true })
+                                Chip(if (settings.fingerDraws) "Finger draws" else "Finger zooms", settings.fingerDraws, {
+                                    settings.updateFingerDraws(!settings.fingerDraws)
+                                })
+                            }
+                            if (!brushErase) ColorDots(brushColor) { brushColor = it }
                             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                BasicText("Size", style = type.caption.copy(color = Studio.textDim), modifier = Modifier.width(56.dp))
+                                StrokePreview(Color(brushColor), brushSize * min(frame.width, frame.height) * zoom.scale, false, Modifier.width(56.dp))
                                 StudioSlider(brushSize, { brushSize = it }, {}, min = 0.003f, max = 0.05f, center = null)
                             }
                         }
@@ -384,14 +611,23 @@ private fun PhotoCanvas(
     selectedText: Long?,
     onSelectText: (Long?) -> Unit,
     onLive: (PhotoEdit) -> Unit,
-    onCommit: (PhotoEdit) -> Unit
+    onCommit: (PhotoEdit) -> Unit,
+    onFrame: (Rect) -> Unit = {},
+    live: PenStroke? = null,
+    liveVersion: () -> Int = { 0 }
 ) {
     val image = remember(proxy) { proxy.asImageBitmap() }
     val cropping = tool == Tool.Crop
     val accent = Studio.accent
     val density = LocalDensity.current
     val shader = remember { if (Look.supportsShader) RuntimeShader(Look.SHADER) else null }
-    var liveStroke by remember { mutableStateOf<FloatArray?>(null) }
+    val livePaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeCap = android.graphics.Paint.Cap.ROUND
+            strokeJoin = android.graphics.Paint.Join.ROUND
+        }
+    }
     val latest = androidx.compose.runtime.rememberUpdatedState(edit)
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -406,6 +642,8 @@ private fun PhotoCanvas(
         val m = remember(edit.rotation, edit.flipH, edit.straighten, edit.crop, cropping, proxy) {
             androidx.compose.ui.graphics.Matrix().apply { setFrom(edit.matrix(proxy.width, proxy.height, cropped = !cropping)) }
         }
+        val frameRect = Rect(left, topY, left + dw, topY + dh)
+        LaunchedEffect(frameRect) { onFrame(frameRect) }
         val frameMod = Modifier
             .offset { IntOffset(left.roundToInt(), topY.roundToInt()) }
             .size(with(density) { dw.toDp() }, with(density) { dh.toDp() })
@@ -441,27 +679,8 @@ private fun PhotoCanvas(
         if (!cropping) {
             Canvas(
                 frameMod
-                    .pointerInput(tool, brushColor, brushSize) {
-                        if (tool == Tool.Draw) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown()
-                                val pts = ArrayList<Float>()
-                                fun add(o: Offset) {
-                                    pts += (o.x / size.width).coerceIn(0f, 1f); pts += (o.y / size.height).coerceIn(0f, 1f)
-                                    liveStroke = pts.toFloatArray()
-                                }
-                                add(down.position)
-                                while (true) {
-                                    val e = awaitPointerEvent()
-                                    val c = e.changes.first()
-                                    if (!c.pressed) break
-                                    add(c.position); c.consume()
-                                }
-                                val stroke = BrushStroke(pts.toFloatArray(), brushColor, brushSize)
-                                liveStroke = null
-                                onCommit(latest.value.copy(strokes = latest.value.strokes + stroke))
-                            }
-                        } else if (tool == Tool.Text) {
+                    .pointerInput(tool) {
+                        if (tool == Tool.Text) {
                             awaitEachGesture {
                                 val down = awaitFirstDown()
                                 val e0 = latest.value
@@ -494,8 +713,7 @@ private fun PhotoCanvas(
                     }
             ) {
                 drawIntoCanvas { c ->
-                    val strokes = edit.strokes + listOfNotNull(liveStroke?.let { BrushStroke(it, brushColor, brushSize) })
-                    PhotoEdit.drawStrokes(c.nativeCanvas, strokes, size.width, size.height)
+                    PhotoEdit.drawStrokes(c.nativeCanvas, edit.strokes, size.width, size.height)
                     PhotoEdit.drawTexts(c.nativeCanvas, edit.texts, size.width, size.height)
                 }
                 if (tool == Tool.Text) edit.texts.firstOrNull { it.id == selectedText }?.let { t ->
@@ -510,6 +728,13 @@ private fun PhotoCanvas(
                         style = Stroke(2.dp.toPx())
                     )
                 }
+            }
+            // The stroke in progress lives on its own layer: a new sample redraws only this.
+            Canvas(frameMod.graphicsLayer { }) {
+                liveVersion()
+                val stroke = live ?: return@Canvas
+                livePaint.color = brushColor
+                drawIntoCanvas { stroke.draw(it.nativeCanvas, size.width, size.height, brushSize * min(size.width, size.height), livePaint) }
             }
         } else {
             CropOverlay(frameMod, edit, onLive, onCommit, proxy.width, proxy.height)

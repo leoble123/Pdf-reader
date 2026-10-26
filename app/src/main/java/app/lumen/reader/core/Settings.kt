@@ -22,6 +22,23 @@ class Settings(context: Context) {
     var amoled by mutableStateOf(prefs.getBoolean("amoled", false))
         private set
 
+    /** Whether a finger draws in markup mode. Turned off automatically the first time a stylus touches. */
+    var fingerDraws by mutableStateOf(prefs.getBoolean("finger_draws", true))
+        private set
+    var stylusSeen by mutableStateOf(prefs.getBoolean("stylus_seen", false))
+        private set
+
+    fun updateFingerDraws(v: Boolean) { fingerDraws = v; prefs.edit { putBoolean("finger_draws", v) } }
+
+    /** First stylus contact: from now on fingers navigate and the pen draws. Returns true the first time. */
+    fun noteStylus(): Boolean {
+        if (stylusSeen) return false
+        stylusSeen = true
+        fingerDraws = false
+        prefs.edit { putBoolean("stylus_seen", true); putBoolean("finger_draws", false) }
+        return true
+    }
+
     fun updateTheme(v: ThemeMode) { themeMode = v; prefs.edit { putString("theme", v.name) } }
     fun updateDynamic(v: Boolean) { dynamicColor = v; prefs.edit { putBoolean("dynamic", v) } }
     fun updateKeepScreenOn(v: Boolean) { keepScreenOn = v; prefs.edit { putBoolean("screen_on", v) } }
