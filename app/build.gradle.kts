@@ -12,8 +12,8 @@ android {
         applicationId = "app.lumen.reader"
         minSdk = 26
         targetSdk = 37
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
         androidResources.localeFilters += arrayOf("en")
     }
 
@@ -82,6 +82,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.compose.material3)
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.motionprediction)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

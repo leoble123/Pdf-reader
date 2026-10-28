@@ -214,6 +214,8 @@ fun HomeScreen(
                         tools.forEach { t -> ToolCard(t, Modifier.weight(1f)) }
                     }
                 }
+                full("notebooks-h") { SectionTitle("Notebooks") }
+                full("notebooks") { app.lumen.reader.notebook.NotebookShelf(onOpen = { ref -> onCreate(Route.Doc(ref)) }) }
                 full("folders-h") { SectionTitle("Folders") }
                 full("folders") {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

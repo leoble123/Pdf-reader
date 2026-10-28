@@ -23,6 +23,14 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.toSize
 import app.lumen.reader.core.LocalSettings
 import app.lumen.reader.core.MultiTap
+import app.lumen.reader.core.OneEuroFilter
+import app.lumen.reader.core.PalmGuard
+import app.lumen.reader.core.PenPredictor
+import app.lumen.reader.core.isCancellation
+import app.lumen.reader.core.palmPx
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import kotlin.math.hypot
 import app.lumen.reader.core.PenMath
 import app.lumen.reader.core.PenStroke
 import app.lumen.reader.core.isPen
@@ -195,6 +203,8 @@ private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
     val decay = rememberSplineBasedDecay<Float>()
+    val palm = remember { PalmGuard(palmPx(context)) }
+    val predictor = remember(view) { PenPredictor(view) }
     LaunchedEffect(tool) { if (tool == Tool.Crop) zoom.reset() }
 
     LaunchedEffect(ref) {
@@ -278,6 +288,18 @@ private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
                 .background(Studio.background)
                 .padding(top = top + 72.dp, bottom = bottom + 200.dp, start = 12.dp, end = 12.dp)
                 .onSizeChanged { zoom.viewport = it.toSize() }
+                .pointerInput(tool) {
+                    if (tool != Tool.Draw) return@pointerInput
+                    // Track the hovering pen for palm rejection.
+                    awaitPointerEventScope {
+                        while (true) {
+                            val e = awaitPointerEvent(PointerEventPass.Initial)
+                            val c = e.changes.firstOrNull() ?: continue
+                            if (c.isPen) palm.notePen(hover = !c.pressed, now = c.uptimeMillis)
+                            if (e.type == PointerEventType.Exit) palm.penGone()
+                        }
+                    }
+                }
                 .pointerInput(tool, brushColor, brushSize, brushErase) {
                     if (tool == Tool.Crop) return@pointerInput
                     awaitEachGesture {
@@ -306,7 +328,10 @@ private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
                         suspend fun AwaitPointerEventScope.stroke(start: PointerInputChange): Boolean {
                             val pen = start.isPen
                             val startEvent = currentEvent
-                            if (pen) requestLowLatency(view, startEvent)
+                            if (pen) {
+                                requestLowLatency(view, startEvent)
+                                predictor.record(startEvent)
+                            }
                             val p0 = norm(start.position)
                             if (!pen && (p0.x !in -0.05f..1.05f || p0.y !in -0.05f..1.05f)) return true
                             val erasing = brushErase || startEvent.wantsEraser(start)
@@ -321,16 +346,32 @@ private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
                             }
                             start.consume()
                             var lastPressure = start.pressure
+                            var lastQ = p0
+                            var lastRaw = start.position
+                            val smoother = OneEuroFilter()
+                            smoother.filter(start.position.x, start.position.y, start.uptimeMillis)
                             var snapped = erasing
                             var anchor = start.position
                             var anchorTime = start.uptimeMillis
                             val still = 7.dp.toPx()
-                            fun sample(screen: Offset, pressure: Float) {
-                                val q = norm(screen)
+                            fun sample(screen: Offset, pressure: Float, time: Long) {
+                                lastRaw = screen
                                 if (erasing) {
-                                    cur = erased(cur, q); edit = cur
-                                } else if (s.add(q.x.coerceIn(0f, 1f), q.y.coerceIn(0f, 1f), pressure)) liveVersion++
+                                    // Walk the eraser along the swipe so fast passes don't skip strokes.
+                                    val q = norm(screen)
+                                    val steps = (hypot(q.x - lastQ.x, (q.y - lastQ.y) / aspect) / (eraseRadius * 0.5f)).toInt().coerceIn(1, 64)
+                                    for (i in 1..steps) {
+                                        val t = i.toFloat() / steps
+                                        cur = erased(cur, Offset(lastQ.x + (q.x - lastQ.x) * t, lastQ.y + (q.y - lastQ.y) * t))
+                                    }
+                                    lastQ = q
+                                    edit = cur
+                                } else {
+                                    val q = norm(smoother.filter(screen.x, screen.y, time))
+                                    if (s.add(q.x.coerceIn(0f, 1f), q.y.coerceIn(0f, 1f), pressure)) liveVersion++
+                                }
                             }
+                            var cancelled = false
                             while (true) {
                                 val event = if (!snapped) {
                                     val remaining = anchorTime + 480L - SystemClock.uptimeMillis()
@@ -347,6 +388,8 @@ private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
                                 val c = event.changes.firstOrNull { it.id == start.id }
                                 if (c == null || !c.pressed) {
                                     event.changes.forEach { it.consume() }
+                                    cancelled = event.isCancellation()
+                                    if (pen) palm.notePen(hover = false, now = SystemClock.uptimeMillis())
                                     break
                                 }
                                 if (!pen && event.changes.count { it.pressed } > 1) {
@@ -355,9 +398,17 @@ private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
                                     return true
                                 }
                                 val hist = c.historical
-                                for (k in hist.indices) sample(hist[k].position, lastPressure + (c.pressure - lastPressure) * (k + 1f) / (hist.size + 1))
-                                sample(c.position, c.pressure)
+                                for (k in hist.indices) sample(hist[k].position, lastPressure + (c.pressure - lastPressure) * (k + 1f) / (hist.size + 1), hist[k].uptimeMillis)
+                                sample(c.position, c.pressure, c.uptimeMillis)
                                 lastPressure = c.pressure
+                                if (pen && !erasing) {
+                                    palm.notePen(hover = false, now = c.uptimeMillis)
+                                    predictor.record(event)
+                                    val ahead = predictor.predict(c, event)?.let { norm(it) }
+                                    s.predictedX = ahead?.x ?: Float.NaN
+                                    s.predictedY = ahead?.y ?: Float.NaN
+                                    liveVersion++
+                                }
                                 if ((c.position - anchor).getDistance() > still) {
                                     anchor = c.position; anchorTime = c.uptimeMillis
                                 }
@@ -365,19 +416,43 @@ private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
                             }
                             if (erasing) {
                                 if (cur !== base) commit(cur)
+                            } else if (cancelled) {
+                                // The system took the touch back as a palm: no ink.
+                                live = null; liveVersion++
                             } else {
+                                val end = norm(lastRaw)
+                                s.add(end.x.coerceIn(0f, 1f), end.y.coerceIn(0f, 1f), lastPressure)
                                 live = null; liveVersion++
                                 commit(base.copy(strokes = base.strokes + BrushStroke(s.points(), brushColor, brushSize * s.evenWidth(), s.widths())))
                             }
                             return false
                         }
 
+                        val palmSuspect = tool == Tool.Draw && !down.isPen &&
+                            (palm.penNear(down.uptimeMillis) || palm.isPalmSized(currentEvent))
                         if (tool == Tool.Draw && proxy != null) {
                             if (down.type == PointerType.Stylus || down.type == PointerType.Eraser) {
                                 if (settings.noteStylus()) hud.show("Stylus detected · fingers now zoom")
                             }
-                            if (down.isPen || settings.fingerDraws) {
+                            if (down.isPen || (settings.fingerDraws && !palmSuspect)) {
                                 if (!stroke(down)) return@awaitEachGesture
+                            }
+                        }
+                        if (palmSuspect) {
+                            // A resting hand: ignore it unless two normal fingers land together (pinch).
+                            var pinch = false
+                            var bigContact = false
+                            while (!pinch) {
+                                val e = awaitPointerEvent()
+                                e.changes.firstOrNull { it.isPen && it.changedToDown() }?.let { p ->
+                                    stroke(p); return@awaitEachGesture
+                                }
+                                if (e.changes.none { it.pressed }) return@awaitEachGesture
+                                if (palm.isPalmSized(e)) bigContact = true
+                                val second = e.changes.firstOrNull { it.changedToDown() }
+                                if (second != null && !bigContact && e.changes.count { it.pressed } == 2 &&
+                                    second.uptimeMillis - down.uptimeMillis < 150
+                                ) pinch = true
                             }
                         }
 
@@ -395,6 +470,7 @@ private fun PhotoEditor(ref: DocRef, drawFirst: Boolean, onBack: () -> Unit) {
                         while (true) {
                             val e = awaitPointerEvent()
                             taps.track(e)
+                            if (palm.isPalmSized(e)) taps.reject()
                             if (tool == Tool.Draw) {
                                 penMidway = e.changes.firstOrNull { it.isPen && it.changedToDown() }
                                 if (penMidway != null) break

@@ -71,6 +71,16 @@ fun SettingsScreen(onBack: () -> Unit) {
             Toggle("Pure black", "True black backgrounds in dark theme — saves battery on OLED screens", settings.amoled) {
                 settings.updateAmoled(it)
             }
+            Toggle("Smooth motion", "Use the screen's highest refresh rate (90/120 Hz) for scrolling, zooming and ink", settings.highRefresh) {
+                settings.updateHighRefresh(it)
+            }
+            Header("Pen")
+            Toggle(
+                "Draw with finger",
+                if (settings.fingerDraws) "One finger draws in markup; two fingers scroll and zoom"
+                else "Only a stylus draws; fingers scroll and zoom, and touches near the pen are ignored",
+                settings.fingerDraws
+            ) { settings.updateFingerDraws(it) }
             Header("Reading")
             Toggle("Keep screen on", "Don't let the screen sleep while Lumen is open", settings.keepScreenOn) {
                 settings.updateKeepScreenOn(it)

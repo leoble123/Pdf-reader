@@ -114,12 +114,29 @@ internal fun InkToolbar(ink: InkController) {
                         )
                     }
                 }
-                InkTool.Eraser -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
-                        SegmentedButton(ink.eraseWhole, { ink.eraseWhole = true }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Whole stroke") }
-                        SegmentedButton(!ink.eraseWhole, { ink.eraseWhole = false }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Partial") }
+                InkTool.Eraser -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
+                            SegmentedButton(ink.eraseWhole, { ink.eraseWhole = true }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Whole stroke") }
+                            SegmentedButton(!ink.eraseWhole, { ink.eraseWhole = false }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Partial") }
+                        }
+                        TextButton(onClick = { ink.clearAll() }, enabled = !ink.isEmpty) { Text("Clear all") }
                     }
-                    TextButton(onClick = { ink.clearAll() }, enabled = !ink.isEmpty) { Text("Clear all") }
+                    val screenW = LocalWindowInfo.current.containerSize.width
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // The eraser's real footprint at 1× zoom.
+                        androidx.compose.foundation.Canvas(Modifier.size(56.dp, 32.dp)) {
+                            val r = (ink.eraserSize * screenW).coerceIn(2f, size.height / 2)
+                            drawCircle(scheme.surfaceVariant, r)
+                            drawCircle(scheme.outline, r, style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
+                        }
+                        Slider(
+                            value = ink.eraserSize,
+                            onValueChange = { ink.eraserSize = it },
+                            valueRange = 0.006f..0.05f,
+                            modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                        )
+                    }
                 }
                 InkTool.Lasso -> Row(
                     Modifier.fillMaxWidth().height(40.dp),

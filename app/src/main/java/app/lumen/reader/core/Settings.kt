@@ -28,6 +28,12 @@ class Settings(context: Context) {
     var stylusSeen by mutableStateOf(prefs.getBoolean("stylus_seen", false))
         private set
 
+    /** Run at the display's fastest refresh rate (90/120 Hz) instead of letting the system pick. */
+    var highRefresh by mutableStateOf(prefs.getBoolean("high_refresh", true))
+        private set
+
+    fun updateHighRefresh(v: Boolean) { highRefresh = v; prefs.edit { putBoolean("high_refresh", v) } }
+
     fun updateFingerDraws(v: Boolean) { fingerDraws = v; prefs.edit { putBoolean("finger_draws", v) } }
 
     /** First stylus contact: from now on fingers navigate and the pen draws. Returns true the first time. */

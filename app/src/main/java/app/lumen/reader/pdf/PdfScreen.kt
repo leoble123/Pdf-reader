@@ -93,6 +93,7 @@ import androidx.compose.material.icons.rounded.Draw
 import androidx.compose.material.icons.rounded.ViewModule
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.SaveAlt
+import androidx.compose.material.icons.rounded.PostAdd
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.ui.graphics.Color
 import app.lumen.reader.core.Recents
@@ -122,6 +123,7 @@ fun PdfScreen(ref: DocRef, recents: Recents, onBack: () -> Unit) {
     val context = LocalContext.current
     var password by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
+    var resumeAt by remember { mutableStateOf<Int?>(null) }
     var load by remember { mutableStateOf<PdfLoad>(PdfLoad.Loading) }
 
     LaunchedEffect(ref, password, reload) {
@@ -140,7 +142,7 @@ fun PdfScreen(ref: DocRef, recents: Recents, onBack: () -> Unit) {
     }
 
     when (current) {
-        is PdfLoad.Ready -> key(current.doc) { PdfReader(ref, current.doc, recents, onBack, onReload = { reload++ }) }
+        is PdfLoad.Ready -> key(current.doc) { PdfReader(ref, current.doc, recents, onBack, resumeAt, onReload = { page -> resumeAt = page; reload++ }) }
         else -> ViewerScaffold(ref, ref.name, "PDF", chromeVisible = true, onBack = onBack) {
             when (current) {
                 PdfLoad.Loading -> LoadingIndicator()
@@ -211,13 +213,13 @@ private fun PasswordPrompt(wrong: Boolean, onSubmit: (String) -> Unit) {
 
 @OptIn(kotlinx.coroutines.FlowPreview::class)
 @Composable
-private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> Unit, onReload: () -> Unit) {
+private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> Unit, resumeAt: Int?, onReload: (resumePage: Int?) -> Unit) {
     val context = LocalContext.current
     val colors = Lumen.colors
     val type = Lumen.type
     val scope = rememberCoroutineScope()
     val state = remember(doc) {
-        PdfViewerState(recents.positionOf(ref).coerceIn(0, maxOf(0, doc.pageCount - 1)))
+        PdfViewerState((resumeAt ?: recents.positionOf(ref)).coerceIn(0, maxOf(0, doc.pageCount - 1)))
     }
     var chrome by rememberSaveable { mutableStateOf(true) }
     var theme by rememberSaveable { mutableStateOf(PageTheme.Light) }
@@ -230,7 +232,9 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
     var goTo by remember { mutableStateOf(false) }
     val ink = remember(ref) { InkController.forDoc(context, ref) }
     val pickers = LocalPickers.current
-    var markup by rememberSaveable { mutableStateOf(false) }
+    // Notebooks (blank paper made by Lumen) open straight into drawing.
+    val notebook = remember(doc) { app.lumen.reader.notebook.Notebooks.info(context, ref) }
+    var markup by rememberSaveable { mutableStateOf(notebook != null) }
     var note by remember { mutableStateOf<Triple<Int, Float, Float>?>(null) }
     var exportProgress by remember { mutableStateOf<Float?>(null) }
     val settings = app.lumen.reader.core.LocalSettings.current
@@ -249,12 +253,42 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
         } else hud.show("Nothing to redo")
     }
 
+    /** Notebooks keep their ink live; exporting writes an annotated copy wherever you choose. */
+    fun exportNotebook() {
+        val nb = notebook ?: return
+        scope.launch {
+            exportProgress = 0f
+            val bytes = runCatching {
+                withContext(Dispatchers.IO) {
+                    val reader = app.lumen.reader.pdf.engine.PdfReader(nb.file.readBytes())
+                    java.io.ByteArrayOutputStream().also { app.lumen.reader.pdf.engine.PdfAnnotator.save(reader, ink.pages.toMap(), it) }.toByteArray()
+                }
+            }.getOrNull()
+            exportProgress = null
+            if (bytes == null) {
+                toast(context, "Export failed"); return@launch
+            }
+            toast(context, Saver.saveCopy(context, pickers, nb.name.replace(Regex("[\\\\/:*?\"<>|]"), "-") + ".pdf", "application/pdf") { it.write(bytes) })
+        }
+    }
+
+    fun addPage() {
+        scope.launch {
+            val info = app.lumen.reader.notebook.Notebooks.addPage(context, ref) ?: return@launch
+            hud.show("Page ${info.pages} added")
+            onReload(info.pages - 1)
+        }
+    }
+
     /**
      * Writes the markup into the PDF as real annotations (incremental update, original bytes
      * untouched). Encrypted or unparseable files fall back to a flattened copy.
      */
     fun export() {
         if (exportProgress != null || ink.isEmpty) return
+        if (notebook != null) {
+            exportNotebook(); return
+        }
         scope.launch {
             exportProgress = 0f
             val bytes = runCatching {
@@ -272,7 +306,7 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
                     // The marks now live inside the PDF itself; reload so PDFium draws them.
                     ink.discard()
                     markup = false
-                    onReload()
+                    onReload(null)
                 } else if (result is Saver.Result.SavedCopy) {
                     ink.discard()
                     markup = false
@@ -290,7 +324,7 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
             tmp.delete()
         }
     }
-    androidx.activity.compose.BackHandler(markup && note == null) {
+    androidx.activity.compose.BackHandler(markup && note == null && (notebook == null || ink.selection != null)) {
         if (ink.selection != null) ink.clearSelection() else markup = false
     }
     LaunchedEffect(markup) { if (!markup) ink.clearSelection() }
@@ -344,12 +378,12 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
     val navigate = app.lumen.reader.core.LocalNavigator.current
     ViewerScaffold(
         ref = ref,
-        title = ref.name,
-        subtitle = "PDF · ${doc.pageCount} pages",
-        menu = listOf(
-            app.lumen.reader.viewer.MenuAction("Organise pages", Icons.Rounded.ViewModule) {
+        title = notebook?.name ?: ref.name,
+        subtitle = if (notebook != null) "Notebook · page ${state.currentPage + 1} of ${doc.pageCount}" else "PDF · ${doc.pageCount} pages",
+        menu = listOfNotNull(
+            if (notebook == null) app.lumen.reader.viewer.MenuAction("Organise pages", Icons.Rounded.ViewModule) {
                 navigate(app.lumen.reader.core.Route.PdfTools(listOf(ref)))
-            },
+            } else app.lumen.reader.viewer.MenuAction("Add page", Icons.Rounded.PostAdd) { addPage() },
             app.lumen.reader.viewer.MenuAction("Page colour: ${theme.label}", Icons.Rounded.Palette) {
                 theme = PageTheme.entries[(theme.ordinal + 1) % PageTheme.entries.size]
             }
@@ -375,7 +409,8 @@ private fun PdfReader(ref: DocRef, doc: PdfDoc, recents: Recents, onBack: () -> 
                     iconTint = if (ink.canUndo) Color.Unspecified else colors.contentTertiary)
                 AppIconButton(Icons.AutoMirrored.Rounded.Redo, "Redo", { redoInk() },
                     iconTint = if (ink.canRedo) Color.Unspecified else colors.contentTertiary)
-                AppIconButton(Icons.Rounded.SaveAlt, "Save markup into PDF", ::export, enabled = !ink.isEmpty)
+                if (notebook != null) AppIconButton(Icons.Rounded.PostAdd, "Add page", ::addPage)
+                AppIconButton(Icons.Rounded.SaveAlt, if (notebook != null) "Export PDF" else "Save markup into PDF", ::export, enabled = !ink.isEmpty)
                 AppIconButton(Icons.Rounded.Check, "Done", { markup = false }, tint = colors.accent, iconTint = Color.White)
             } else if (searching) {
                 AppIconButton(Icons.Rounded.KeyboardArrowUp, "Previous", { stepHit(-1) })

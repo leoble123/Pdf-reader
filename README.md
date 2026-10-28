@@ -34,6 +34,10 @@ Edits are saved back to the original file when the app that provided it allows w
 | Word (`.docx`) | Tap a paragraph to rewrite, delete, or add one below. Only touched paragraphs change; headings and list styles carry over. Paragraphs holding images or objects are read-only |
 | PDF | Markup mode: pen, highlighter, eraser, lasso and text notes, with undo/redo. See *Pen & stylus* below. *Save* writes the marks into the PDF as real Ink and FreeText annotations through an incremental update. The original bytes stay untouched, so bookmarks and forms survive, and any PDF app can show, edit or remove the marks. Pressure strokes keep their varying width. Encrypted files fall back to a flattened copy |
 
+## Notebooks
+
+Draw on blank paper: tap **New notebook** on the home screen and choose blank, lined, grid or dot paper. Notebooks open straight into drawing, with every pen feature below. Add pages from the toolbar and export the whole notebook as a PDF whenever you like. Notebooks live on the home shelf, which shows each one's first page. Long-press one to rename or delete it. The paper is a tiny vector PDF (every page shares one drawing), and the ink is stored beside it, so adding pages never touches what you've drawn.
+
 ## Pen & stylus
 
 Applies to PDF markup and the photo editor's Draw tool.
@@ -45,6 +49,9 @@ Applies to PDF markup and the photo editor's Draw tool.
 - **Eraser:** removes whole strokes or only the part you rub over. The stylus's eraser end or side button erases with any tool.
 - **Lasso** (PDF): circle marks to select them, then drag, duplicate, recolour or delete them.
 - **Extras:** a hover ring shows where the pen will land and how big it is. The size slider has a true-to-scale preview, there's a custom colour strip that remembers recent colours, and you can pinch-zoom the photo canvas while drawing.
+- **Palm rejection:** while the pen hovers or was just lifted, finger touches are treated as your hand resting and ignored. A deliberate two-finger pinch (both fingers landing together) still zooms. Palm-sized contacts never count, and a touch the system cancels as a palm leaves no ink. Multi-finger undo taps must land together, so a resting palm can't trigger them.
+- **Feel:** a one-euro filter removes jitter on slow strokes without adding lag on fast ones, and the stroke ends exactly where the pen lifted. Android's motion prediction draws a short tail a frame ahead of the pen to hide latency.
+- **Erasing** sweeps the whole path between samples, so fast swipes don't skip strokes. The eraser size is adjustable and shown to scale, and a bounding-box check keeps it quick on busy pages.
 - **Speed:** each page has separate layers for highlights, finished ink and the stroke in progress. A new pen sample redraws only the live layer, and that layer extends its path in place. Ink is saved to disk on a background thread.
 
 ## PDF tools
@@ -65,7 +72,7 @@ Pages save as a compact PDF that embeds the JPEGs directly. No camera permission
 - **Folders:** add any folder through the system picker to browse it with sorting and filtering. Swipe between the photos in a folder.
 - **Compress video / extract audio:** re-encode to 480p, 720p or 1080p, or save the soundtrack as M4A.
 - **Read aloud:** reads documents with the phone's offline text-to-speech, scrolling along as it goes.
-- **Settings:** theme, dynamic colour, pure black, keep screen on.
+- **Settings:** theme, dynamic colour, pure black, smooth motion, finger drawing, keep screen on. *Smooth motion* asks for the screen's highest refresh rate (90/120 Hz); many phones otherwise hold apps at 60 Hz.
 
 ## Photo editor
 

@@ -2,6 +2,7 @@ package app.lumen.reader.core
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.view.MotionEvent
 import android.view.View
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -250,6 +251,10 @@ class PenStroke(val aspect: Float, val pressure: Boolean) {
         private set
     private var smoothedPressure = -1f
 
+    /** Where the pen is predicted to be a frame from now (NaN = no prediction). Drawn, never saved. */
+    var predictedX = Float.NaN
+    var predictedY = Float.NaN
+
     private val path = android.graphics.Path()
     private var built = 0
     private var builtW = 0f
@@ -315,6 +320,7 @@ class PenStroke(val aspect: Float, val pressure: Boolean) {
         if (size == 0) return
         if (pressure && shape == null) {
             PenMath.drawVariable(canvas, pts, wid, w, h, baseWidth, paint.apply { strokeCap = Paint.Cap.ROUND })
+            drawPrediction(canvas, w, h, baseWidth * wid[size - 1], paint)
             return
         }
         paint.strokeWidth = baseWidth * evenWidth()
@@ -339,16 +345,25 @@ class PenStroke(val aspect: Float, val pressure: Boolean) {
             val my = if (size == 2) pts[1] * h else (pts[i * 2 - 1] * h + pts[i * 2 + 1] * h) / 2
             canvas.drawLine(mx, my, pts[i * 2] * w, pts[i * 2 + 1] * h, paint)
         }
+        if (shape == null) drawPrediction(canvas, w, h, paint.strokeWidth, paint)
+    }
+
+    /** Extends the ink to where the pen is about to be, hiding most of the touch-to-screen lag. */
+    private fun drawPrediction(canvas: Canvas, w: Float, h: Float, width: Float, paint: Paint) {
+        if (predictedX.isNaN() || size == 0) return
+        paint.strokeWidth = width
+        canvas.drawLine(pts[size * 2 - 2] * w, pts[size * 2 - 1] * h, predictedX * w, predictedY * h, paint)
     }
 }
 
 /**
- * Recognises a quick multi-finger tap (all fingers down and up within [maxDuration] with no
- * real movement). Feed it every event of a gesture; [fingers] is the result once it ends.
+ * Recognises a quick multi-finger tap: every finger lands within [landWindow] of the first
+ * (a resting palm creeps in over time, deliberate taps don't), nothing moves, and it's all
+ * over within the duration passed to [fingers]. Feed it every event of a gesture.
  */
-class MultiTap(private val startMillis: Long, private val slop: Float) {
+class MultiTap(private val startMillis: Long, private val slop: Float, private val landWindow: Long = 150) {
     private var maxPointers = 1
-    private var moved = false
+    private var invalid = false
     private val origins = HashMap<Long, androidx.compose.ui.geometry.Offset>()
     private var lastMillis = startMillis
 
@@ -357,13 +372,133 @@ class MultiTap(private val startMillis: Long, private val slop: Float) {
         maxPointers = max(maxPointers, pressed)
         for (c in event.changes) {
             val key = c.id.value
-            val origin = origins.getOrPut(key) { c.position }
-            if ((c.position - origin).getDistance() > slop) moved = true
+            val origin = origins[key]
+            if (origin == null) {
+                origins[key] = c.position
+                if (c.pressed && c.uptimeMillis - startMillis > landWindow) invalid = true
+            } else if ((c.position - origin).getDistance() > slop) invalid = true
             lastMillis = max(lastMillis, c.uptimeMillis)
         }
     }
 
+    /** Rules the gesture out (e.g. a palm was detected). */
+    fun reject() {
+        invalid = true
+    }
+
     /** Number of fingers in the tap, or 0 if this wasn't a multi-finger tap. */
-    fun fingers(maxDuration: Long = 320): Int =
-        if (!moved && maxPointers >= 2 && lastMillis - startMillis <= maxDuration) maxPointers else 0
+    fun fingers(maxDuration: Long = 300): Int =
+        if (!invalid && maxPointers >= 2 && lastMillis - startMillis <= maxDuration) maxPointers else 0
+}
+
+/**
+ * One-euro filter (Casiez et al.) in screen pixels: smooths hard when the pen moves slowly,
+ * where jitter shows, and barely at all when it moves fast, where lag would show.
+ */
+class OneEuroFilter(private val minCutoff: Float = 4f, private val beta: Float = 0.03f, private val dCutoff: Float = 1.5f) {
+    private var x = 0f
+    private var y = 0f
+    private var dx = 0f
+    private var dy = 0f
+    private var last = -1L
+
+    private fun alpha(cutoff: Float, te: Float): Float {
+        val tau = 1f / (2f * Math.PI.toFloat() * cutoff)
+        return 1f / (1f + tau / te)
+    }
+
+    fun filter(px: Float, py: Float, timeMillis: Long): androidx.compose.ui.geometry.Offset {
+        if (last < 0) {
+            x = px; y = py; last = timeMillis
+            return androidx.compose.ui.geometry.Offset(px, py)
+        }
+        // Stylus samples can share a millisecond; treat them as ~4 ms apart.
+        val te = max(timeMillis - last, 4L) / 1000f
+        last = timeMillis
+        val ad = alpha(dCutoff, te)
+        dx += ad * ((px - x) / te - dx)
+        dy += ad * ((py - y) / te - dy)
+        val a = alpha(minCutoff + beta * hypot(dx, dy), te)
+        x += a * (px - x)
+        y += a * (py - y)
+        return androidx.compose.ui.geometry.Offset(x, y)
+    }
+}
+
+/**
+ * Palm rejection that complements the system's: while the pen hovers or was just lifted,
+ * stray touches are almost always the writing hand, and contacts as big as a palm never count.
+ */
+class PalmGuard(private val palmPx: Float) {
+    var hovering = false
+        private set
+    private var lastPen = Long.MIN_VALUE / 2
+
+    /** Feed every pen event (hover or contact). */
+    fun notePen(hover: Boolean, now: Long) {
+        hovering = hover
+        lastPen = now
+    }
+
+    fun penGone() {
+        hovering = false
+    }
+
+    /** True if a finger touch starting at [now] should be treated as a resting hand. */
+    fun penNear(now: Long) = hovering || now - lastPen < 600
+
+    fun isPalmSized(event: PointerEvent): Boolean {
+        val me = event.motionEvent ?: return false
+        if (me.flags and MotionEvent.FLAG_CANCELED != 0) return true
+        for (i in 0 until me.pointerCount) {
+            if (me.getToolType(i) == MotionEvent.TOOL_TYPE_FINGER && max(me.getTouchMajor(i), me.getToolMajor(i)) > palmPx) return true
+        }
+        return false
+    }
+}
+
+/** About 14 mm: wider than any fingertip contact, narrower than a resting palm. */
+fun palmPx(context: android.content.Context): Float {
+    val m = context.resources.displayMetrics
+    val dpi = if (m.xdpi > 100f) m.xdpi else m.densityDpi.toFloat()
+    return 14f / 25.4f * dpi
+}
+
+/**
+ * True when a gesture ended because the system cancelled it (it decided the touch was a palm,
+ * or another window took over) rather than because the pointer lifted.
+ */
+fun PointerEvent.isCancellation(): Boolean {
+    val me = motionEvent ?: return true // Compose synthesises a bare event when input is cancelled
+    return me.actionMasked == MotionEvent.ACTION_CANCEL || me.flags and MotionEvent.FLAG_CANCELED != 0
+}
+
+/**
+ * Wraps androidx.input motion prediction. Feed it the stroke's events and it reports where the
+ * pen will be about a frame later, in the same local coordinates as the pointer change.
+ */
+class PenPredictor(view: View) {
+    private val predictor = runCatching { androidx.input.motionprediction.MotionEventPredictor.newInstance(view) }.getOrNull()
+
+    fun record(event: PointerEvent) {
+        val me = event.motionEvent ?: return
+        runCatching { predictor?.record(me) }
+    }
+
+    fun predict(change: PointerInputChange, event: PointerEvent): androidx.compose.ui.geometry.Offset? {
+        val me = event.motionEvent ?: return null
+        val p = runCatching { predictor?.predict() }.getOrNull() ?: return null
+        try {
+            // Map from the root view's coordinates to the node's via the live sample's offset.
+            val idx = (0 until me.pointerCount).firstOrNull {
+                me.getToolType(it) == MotionEvent.TOOL_TYPE_STYLUS || me.getToolType(it) == MotionEvent.TOOL_TYPE_ERASER
+            } ?: return null
+            val pIdx = (0 until p.pointerCount).firstOrNull { p.getPointerId(it) == me.getPointerId(idx) } ?: 0
+            val ox = change.position.x - me.getX(idx)
+            val oy = change.position.y - me.getY(idx)
+            return androidx.compose.ui.geometry.Offset(p.getX(pIdx) + ox, p.getY(pIdx) + oy)
+        } finally {
+            p.recycle()
+        }
+    }
 }

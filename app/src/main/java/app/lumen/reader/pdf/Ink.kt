@@ -63,6 +63,16 @@ sealed interface Mark {
 
         override fun recolored(color: Int) = Ink(points, color, width, highlighter, widths)
 
+        /** left, top, right, bottom of the points, so the eraser can skip far-away strokes cheaply. */
+        val bounds: FloatArray by lazy {
+            var l = 1f; var t = 1f; var r = 0f; var b = 0f
+            for (i in 0 until points.size / 2) {
+                l = min(l, points[i * 2]); r = max(r, points[i * 2])
+                t = min(t, points[i * 2 + 1]); b = max(b, points[i * 2 + 1])
+            }
+            floatArrayOf(l, t, r, b)
+        }
+
         /** Width used where only one is allowed (PDF /BS, flattened export of even strokes). */
         val averageWidth: Float get() = widths?.let { w -> width * w.average().toFloat() } ?: width
     }
@@ -90,6 +100,8 @@ class InkController(private val file: File) {
     var width by mutableStateOf(0.004f)
     /** Eraser removes whole strokes (true) or only the part it passes over. */
     var eraseWhole by mutableStateOf(true)
+    /** Eraser radius in page widths. */
+    var eraserSize by mutableFloatStateOf(0.016f)
     val recentColors = mutableStateListOf<Int>()
     val pages = mutableStateMapOf<Int, List<Mark>>()
 
@@ -177,6 +189,14 @@ class InkController(private val file: File) {
         if (l.stroke.add(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f), pressure ?: 1f)) liveVersion++
     }
 
+    /** Where the pen is predicted to be next frame (NaN clears). Only drawn, never saved. */
+    fun predict(x: Float, y: Float) {
+        val l = live ?: return
+        if (l.stroke.predictedX.isNaN() && x.isNaN()) return
+        l.stroke.predictedX = x; l.stroke.predictedY = y
+        liveVersion++
+    }
+
     /** Hold-to-straighten: turns the live stroke into a line or shape. True if it changed. */
     fun snapLive(): Boolean {
         val l = live ?: return false
@@ -214,14 +234,32 @@ class InkController(private val file: File) {
         batchChanged = false
     }
 
+    /**
+     * Erases along the segment from the previous eraser position, in steps no wider than half
+     * the eraser, so a fast swipe can't skip over a stroke between two samples.
+     */
+    fun eraseAlong(page: Int, x0: Float, y0: Float, x1: Float, y1: Float, aspect: Float) {
+        val dist = hypot(x1 - x0, (y1 - y0) / aspect)
+        val steps = (dist / (eraserSize * 0.5f)).toInt().coerceIn(1, 64)
+        for (i in 1..steps) {
+            val t = i.toFloat() / steps
+            erase(page, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, aspect)
+        }
+    }
+
     fun erase(page: Int, x: Float, y: Float, aspect: Float) {
         val marks = pages[page] ?: return
-        val radius = if (eraseWhole) 0.016f else 0.012f
+        val radius = eraserSize
         var changed = false
         val out = ArrayList<Mark>(marks.size)
         for (m in marks) when (m) {
             is Mark.Ink -> {
                 val reach = radius + m.width / 2
+                val bb = m.bounds
+                // Bounding-box reject first: most strokes on a page are nowhere near the eraser.
+                if (x < bb[0] - reach || x > bb[2] + reach || y < bb[1] - reach * aspect || y > bb[3] + reach * aspect) {
+                    out += m; continue
+                }
                 if (eraseWhole) {
                     if (PenMath.touches(m.points, x, y, reach, aspect)) changed = true else out += m
                 } else {
@@ -413,8 +451,19 @@ class InkController(private val file: File) {
             io.submit {}.get()
         }
 
-        fun forDoc(context: Context, ref: DocRef) =
-            InkController(File(context.filesDir, "ink/" + Docs.hash(ref.key) + ".json")).apply { load() }
+        private val open = HashMap<String, java.lang.ref.WeakReference<InkController>>()
+
+        /**
+         * One controller per document while it's in use, so reloading the PDF (after adding a
+         * notebook page, say) keeps undo history and never races a background save.
+         */
+        fun forDoc(context: Context, ref: DocRef): InkController = synchronized(open) {
+            open[ref.key]?.get()?.let { return it }
+            flush() // a just-released controller may still be writing this file
+            InkController(fileFor(context, ref)).apply { load() }.also { open[ref.key] = java.lang.ref.WeakReference(it) }
+        }
+
+        fun fileFor(context: Context, ref: DocRef) = File(context.filesDir, "ink/" + Docs.hash(ref.key) + ".json")
     }
 }
 

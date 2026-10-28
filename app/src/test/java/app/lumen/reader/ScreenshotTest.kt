@@ -208,6 +208,20 @@ class ScreenshotTest {
         }
     }
 
+    @Test fun homeNotebooks() {
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val nb = kotlinx.coroutines.runBlocking { app.lumen.reader.notebook.Notebooks.create(ctx, app.lumen.reader.notebook.Paper.Grid) }
+        val ink = app.lumen.reader.pdf.InkController.forDoc(ctx, nb.ref())
+        ink.pages[0] = listOf(
+            app.lumen.reader.pdf.Mark.Ink(FloatArray(40) { i -> if (i % 2 == 0) 0.15f + i * 0.018f else 0.2f + 0.05f * kotlin.math.sin(i * 0.5f) }, 0xFF1F6FEB.toInt(), 0.012f, false),
+            app.lumen.reader.pdf.Mark.Ink(app.lumen.reader.core.PenMath.ellipse(0.5f, 0.5f, 0.3f, 0.15f), 0xFFE5484D.toInt(), 0.01f, false)
+        )
+        kotlinx.coroutines.runBlocking { app.lumen.reader.notebook.Notebooks.create(ctx, app.lumen.reader.notebook.Paper.Lined) }
+        val recents = Recents(ctx)
+        val folders = app.lumen.reader.core.Folders(ctx)
+        shoot("home_notebooks", dark = false) { HomeScreen(recents, folders, {}, {}, {}, {}) }
+    }
+
     @Test fun markupPen() = markup("markup_pen", app.lumen.reader.pdf.InkTool.Pen, select = false)
     @Test fun markupLasso() = markup("markup_lasso", app.lumen.reader.pdf.InkTool.Lasso, select = true)
     @Test fun markupEraser() = markup("markup_eraser", app.lumen.reader.pdf.InkTool.Eraser, select = false)

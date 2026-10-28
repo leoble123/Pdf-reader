@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.Light -> false
                 ThemeMode.Dark -> true
             }
+            LaunchedEffect(settings.highRefresh) { preferRefreshRate(settings.highRefresh) }
             LaunchedEffect(settings.keepScreenOn) {
                 if (settings.keepScreenOn) window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 else window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -78,6 +79,22 @@ class MainActivity : ComponentActivity() {
                     LumenApp(pendingUris)
                 }
             }
+        }
+    }
+
+    /**
+     * Many phones default apps to 60 Hz to save power. Asking for the fastest mode at the
+     * current resolution makes scrolling, zooming and ink track the finger noticeably closer.
+     */
+    private fun preferRefreshRate(high: Boolean) {
+        val display = (if (android.os.Build.VERSION.SDK_INT >= 30) display else @Suppress("DEPRECATION") windowManager.defaultDisplay) ?: return
+        val current = display.mode
+        val best = if (high) display.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .maxByOrNull { it.refreshRate } else null
+        val id = best?.modeId ?: 0
+        if (window.attributes.preferredDisplayModeId != id) {
+            window.attributes = window.attributes.apply { preferredDisplayModeId = id }
         }
     }
 
