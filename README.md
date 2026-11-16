@@ -110,7 +110,7 @@ A timeline in the style of mobile video apps: it scrolls under a fixed playhead,
 
 Requires JDK 21 and Android SDK 37. Minimum Android version: 8.0 (API 26). Dynamic colour needs Android 12+; older versions use a built-in indigo palette.
 
-A prebuilt APK is in [`release/`](release/). It's signed with the debug key so it installs directly. Use your own signing config before publishing.
+A prebuilt APK is in [`release/`](release/). Every build is signed with the key in `keystore/lumen.jks`, so a new APK always installs over the previous one, whichever machine built it. Keep this repository private: anyone with the key can sign an update your phone will accept.
 
 ## Project layout
 

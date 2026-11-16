@@ -17,14 +17,26 @@ android {
         androidResources.localeFilters += arrayOf("en")
     }
 
+    signingConfigs {
+        // One key for every build, kept in the repo so updates always install over the
+        // previous version, whichever machine built them. Keep this repository private.
+        create("lumen") {
+            storeFile = rootProject.file("keystore/lumen.jks")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("lumen")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key so the release APK installs straight away.
-            // Swap in your own signing config before publishing.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("lumen")
             vcsInfo.include = false
         }
     }
