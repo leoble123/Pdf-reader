@@ -67,6 +67,16 @@ Photograph a page with the camera app or import photos. Lumen finds the page edg
 
 Pages save as a compact PDF that embeds the JPEGs directly. No camera permission and no ML model are needed.
 
+## Web pages (HTML)
+
+HTML files open in a browser-grade view that can't reach the internet:
+
+- **JavaScript runs**, with an on/off switch in the menu. Pages can use their own storage (localStorage, IndexedDB), show alerts and dialogs, and use file-upload buttons, which open the system file picker.
+- **Files beside the page load too:** images, stylesheets, scripts, fonts, `fetch()`ed data and other pages. This needs the page opened from a folder added in Lumen (or a file path). Pages are served from a private `https://lumen.local` address, and any request for something outside the page's folder is refused.
+- **Links:** links between local pages work, with back navigation. Web, email and phone links open in the matching app.
+- **Saved web pages** (`.mhtml` / `.mht`) open with all their images and styles, straight from the archive.
+- **Tools:** find in page, text size, a dark-page mode for light pages at night, *Print or save as PDF*, and *Edit source*, which opens the HTML in the code editor. Files a page generates with download links are saved through the system picker.
+
 ## More
 
 - **Folders:** add any folder through the system picker to browse it with sorting and filtering. Swipe between the photos in a folder.
